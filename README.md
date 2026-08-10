@@ -45,7 +45,7 @@ npx sem --dry-run --no-ci --config-json '{"branches":["main"],"plugins":["@sem/c
 Zero consumer deps — the action ships the JS bundle on the release tag.
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v7
   with:
     fetch-depth: 0
 

@@ -76,6 +76,6 @@ outputs:
     description: Git tag of the previous release
 
 runs:
-  using: node20
+  using: node24
   # Built from src/action.tish — run `npm run build` before local uses: ./
   main: dist/action.js
