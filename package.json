@@ -1,7 +1,7 @@
 {
   "name": "@tishlang/sem",
-  "version": "1.0.0",
-  "description": "Automated semantic versioning and release pipeline \u2014 a semantic-release clone written in Tish (dual-runtime: Tish + Node)",
+  "version": "0.2.0",
+  "description": "Automated semantic versioning and release pipeline — a semantic-release clone written in Tish (dual-runtime: Tish + Node)",
   "type": "module",
   "license": "MIT",
   "repository": {
