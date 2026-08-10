@@ -38,8 +38,8 @@
   ],
   "scripts": {
     "start": "tish run --feature full src/main.tish",
-    "release": "tish run --feature full src/main.tish",
-    "release:dry": "tish run --feature full src/main.tish --dry-run --no-ci",
+    "release": "npm run build && node dist/cli.js --no-ci",
+    "release:dry": "npm run build && node dist/cli.js --dry-run --no-ci",
     "build": "bash scripts/build.sh",
     "prepack": "npm run build",
     "prepublishOnly": "npm run build",
