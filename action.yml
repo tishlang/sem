@@ -5,7 +5,7 @@ description: Run @tishlang/sem (semantic release) with inline config — no cons
 author: tishlang
 branding:
   icon: package
-  color: green
+  color: purple
 
 inputs:
   config:
