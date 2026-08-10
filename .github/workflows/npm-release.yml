@@ -20,7 +20,8 @@ on:
 jobs:
   publish:
     name: Publish packages
-    if: github.event.release.prerelease == false
+    # Promote path: published full release (not draft, not prerelease)
+    if: github.event.release.draft == false && github.event.release.prerelease == false
     runs-on: ubuntu-latest
     permissions:
       contents: write
