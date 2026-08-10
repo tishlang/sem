@@ -156,7 +156,7 @@ Same model as the tish repo: merge to `main` drafts a **prerelease** (with asset
 
 On success, sem comments on commit-referenced issues **and** PRs linked via the commits API. `addChannel` flips `prerelease` when a version is added to the latest channel (programmatic promote).
 
-This repo’s CI dogfoods that path: dry-run → pack tarball → `@sem/github` prerelease + asset → promote → `npm-release.yml`.
+This repo’s CI dogfoods that path: dry-run → pack tarball → `@sem/github` prerelease + asset → promote → `npm-release.yml` (npmjs + GitHub Packages).
 
 ## CLI options
 

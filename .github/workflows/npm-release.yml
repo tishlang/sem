@@ -1,11 +1,15 @@
-# Publish @tishlang/sem to npm when a GitHub release is promoted from prerelease.
-# Downloads the prebuilt tarball from the release (no rebuild).
+# Publish @tishlang/sem to npmjs + GitHub Packages when a release is promoted
+# from prerelease. Downloads the prebuilt tarball from the release (no rebuild).
 #
-# AUTH: npm OIDC trusted publishing. One-time setup on npmjs.com for @tishlang/sem:
+# AUTH (npmjs): OIDC trusted publishing. One-time setup on npmjs.com for @tishlang/sem:
 #   Organization or user: tishlang
 #   Repository:           sem
 #   Workflow filename:    npm-release.yml
 # Requires npm >= 11.5.1 and id-token: write.
+#
+# AUTH (GitHub Packages): GITHUB_TOKEN with packages: write.
+# Install: npm install @tishlang/sem --registry=https://npm.pkg.github.com
+#   (or configure @tishlang:registry=https://npm.pkg.github.com in .npmrc)
 
 name: NPM release
 
@@ -15,12 +19,13 @@ on:
 
 jobs:
   publish:
-    name: Publish to npm
+    name: Publish packages
     if: github.event.release.prerelease == false
     runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
+      packages: write
     env:
       NPM_CONFIG_PROVENANCE: "false"
     steps:
@@ -63,7 +68,7 @@ jobs:
           npm install -g "npm@^11"
           npm --version
 
-      - name: Publish @tishlang/sem to npm
+      - name: Publish @tishlang/sem to npmjs
         env:
           # Ensure token auth cannot shadow OIDC (setup-node / secrets leftovers)
           NODE_AUTH_TOKEN: ""
@@ -76,13 +81,27 @@ jobs:
           fi
           npm publish tishlang-sem-npm-package.tgz --access public --registry https://registry.npmjs.org/
 
-      - name: Update release description with npm URL
+      - name: Publish @tishlang/sem to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Scoped packages on GH Packages must use the org registry mapping.
+          {
+            echo "@tishlang:registry=https://npm.pkg.github.com"
+            echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}"
+            echo "always-auth=true"
+          } > .npmrc
+          npm publish tishlang-sem-npm-package.tgz --access public --registry https://npm.pkg.github.com
+          rm -f .npmrc
+
+      - name: Update release description with package URLs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.event.release.tag_name }}"
           VERSION="${TAG#v}"
           NPM_URL="https://www.npmjs.com/package/@tishlang/sem/v/${VERSION}"
+          GH_PKG_URL="https://github.com/${{ github.repository }}/pkgs/npm/sem"
           RELEASE_ID="${{ github.event.release.id }}"
           REPO="${{ github.repository }}"
           CURRENT_BODY=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
@@ -91,6 +110,7 @@ jobs:
 
           ---
           Published to npm: ${NPM_URL}
+          GitHub Packages: ${GH_PKG_URL}
           GitHub Action: uses: ${REPO}@${TAG}"
           curl -s -X PATCH \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
