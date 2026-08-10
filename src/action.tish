@@ -1,5 +1,5 @@
 // sem/src/action.tish
-// semtac GitHub Action entry — compiled to dist/action.js via tish build
+// sem GitHub Action entry — compiled to dist/action.js via tish build
 
 import { loadConfig } from "./config.tish"
 import { release } from "./orchestrator.tish"
@@ -83,7 +83,7 @@ fn runAction() {
   writeGitHubOutputs(result)
 
   if (!result.success) {
-    console.error("semtac failed: " + result.error)
+    console.error("sem action failed: " + result.error)
     process.exit(1)
   }
 

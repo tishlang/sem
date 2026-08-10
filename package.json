@@ -56,8 +56,7 @@
     "changelog",
     "automation",
     "tish",
-    "github-actions",
-    "semtac"
+    "github-actions"
   ],
   "engines": {
     "node": ">=22"

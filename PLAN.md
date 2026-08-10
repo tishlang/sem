@@ -1,1 +1,1 @@
-# Placeholder — see README and docs/TISH_SEMTAC_MIGRATION.md
+# Placeholder — see README and docs/TISH_SEM_MIGRATION.md

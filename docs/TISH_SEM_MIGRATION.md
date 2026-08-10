@@ -1,4 +1,4 @@
-# Plan: migrate tish CI from cycjimmy/semantic-release-action to semtac (@tishlang/sem)
+# Plan: migrate tish CI from cycjimmy/semantic-release-action to sem (@tishlang/sem)
 #
 # Status: PLAN ONLY — do not edit tish in this workstream.
 # Target repo: tishlang/tish (see ~/Projects/tish/tish)
@@ -6,7 +6,7 @@
 ## Goal
 
 Replace `cycjimmy/semantic-release-action@v4` dry-runs used as a **version oracle** in
-`.github/workflows/build-npm-binaries.yml` with `tishlang/sem@v1` (semtac), passing config
+`.github/workflows/build-npm-binaries.yml` with `tishlang/sem@v1`, passing config
 inline so tish no longer needs `extra_plugins` installs into the consumer workspace or
 `TISH_SEMANTIC_RELEASE_CI` strip-down of `release.config.cjs`.
 
@@ -68,14 +68,14 @@ Outputs are intentionally aligned with cycjimmy:
 
 ## Rollout steps
 
-1. **Prerequisite:** Publish `@tishlang/sem` and tag `v1` so `uses: tishlang/sem@v1` resolves with `dist/sem.js` present on the tag.
-2. **Shadow job:** In `build-npm-binaries.yml`, add a parallel dry-run step using semtac; compare `new_release_version` to cycjimmy for N main pushes. Fail the shadow on mismatch only (do not gate release).
-3. **Cutover:** Point the real `id: semantic` / `id: next_version_semantic` steps at semtac; keep soft-skip `exit 0` behavior.
+1. **Prerequisite:** Publish `@tishlang/sem` and tag `v1` so `uses: tishlang/sem@v1` resolves with `dist/` present on the tag.
+2. **Shadow job:** In `build-npm-binaries.yml`, add a parallel dry-run step using `tishlang/sem@v1`; compare `new_release_version` to cycjimmy for N main pushes. Fail the shadow on mismatch only (do not gate release).
+3. **Cutover:** Point the real `id: semantic` / `id: next_version_semantic` steps at sem; keep soft-skip `exit 0` behavior.
 4. **Cleanup:**
    - Remove `extra_plugins` / `semantic_version` inputs.
    - Optionally delete `TISH_SEMANTIC_RELEASE_CI` branch in `release.config.cjs` and thin `npm/tish/release.config.cjs` once nothing else reads them.
    - Drop semantic-release npm packages from any CI-only install paths if they exist solely for dry-run.
-5. **Docs:** Update `docs/RELEASE.md` / `CONTRIBUTING.md` to mention semtac + `@sem/*` plugin names.
+5. **Docs:** Update `docs/RELEASE.md` / `CONTRIBUTING.md` to mention `@tishlang/sem` + `@sem/*` plugin names.
 
 ## Parser / feat! parity checklist
 

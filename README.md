@@ -6,7 +6,7 @@
 |---------|-----|
 | **Tish** | `tish run --feature full src/main.tish` (source via `tish.module`) |
 | **Node** | `npx @tishlang/sem` / `node dist/cli.js` (built from `src/main.tish`) |
-| **GitHub Actions (semtac)** | `uses: tishlang/sem@v1` → `dist/action.js` (built from `src/action.tish`) |
+| **GitHub Actions** | `uses: tishlang/sem@v1` → `dist/action.js` (built from `src/action.tish`) |
 
 ## Features
 
@@ -36,7 +36,7 @@ tish run --feature full src/main.tish --dry-run --no-ci
 npx sem --dry-run --no-ci --config-json '{"branches":["main"],"plugins":["@sem/commit-analyzer","@sem/release-notes-generator"]}'
 ```
 
-## semtac (GitHub Action)
+## GitHub Action
 
 Zero consumer deps — the action ships the JS bundle on the release tag.
 
@@ -133,14 +133,14 @@ sem/
 ├── src/                 # Tish source (also published)
 │   ├── index.tish       # library API
 │   ├── main.tish        # CLI entry
-│   └── action.tish      # semtac Action entry
+│   └── action.tish      # GitHub Action entry
 ├── dist/                # gitignored locally; built by npm run build
 │   ├── sem.js           # library
 │   ├── cli.js           # Node bin
 │   └── action.js        # action.yml main
-├── action.yml           # semtac metadata
+├── action.yml           # Action metadata
 ├── scripts/build.sh     # tish build → dist/
-└── docs/TISH_SEMTAC_MIGRATION.md
+└── docs/TISH_SEM_MIGRATION.md
 ```
 
 ```bash

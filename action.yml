@@ -1,4 +1,4 @@
-name: semtac
+name: sem
 description: Run @tishlang/sem (semantic release) with inline config — no consumer node_modules
 author: tishlang
 branding:
