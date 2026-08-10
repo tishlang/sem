@@ -10,6 +10,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Least privilege by default; release job elevates contents: write.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
