@@ -23,6 +23,8 @@
 npm install -D @tishlang/sem
 ```
 
+First publish is `npm run release` (requires npm login).
+
 Requires Node ≥ 22 for the JS CLI. For Tish-native runs, install a `tish` CLI (`@tishlang/tish` or cargo build).
 
 ## Quick start
