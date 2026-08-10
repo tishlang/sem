@@ -1,0 +1,15 @@
+{
+  "branches": ["main"],
+  "plugins": [
+    "@sem/commit-analyzer",
+    "@sem/release-notes-generator",
+    "@sem/changelog",
+    ["@sem/npm", { "npmPublish": false }],
+    "@sem/github",
+    ["@sem/git", {
+      "assets": ["CHANGELOG.md", "package.json"],
+      "message": "chore(release): ${nextRelease.version} [skip ci]"
+    }]
+  ],
+  "tagFormat": "v${version}"
+}

@@ -1,0 +1,93 @@
+// sem/src/logger.tish
+// Structured, colored ANSI logging with scoped prefixes
+
+const RESET = "\x1b[0m"
+const BOLD = "\x1b[1m"
+const DIM = "\x1b[2m"
+
+const RED = "\x1b[31m"
+const GREEN = "\x1b[32m"
+const YELLOW = "\x1b[33m"
+const BLUE = "\x1b[34m"
+const MAGENTA = "\x1b[35m"
+const CYAN = "\x1b[36m"
+const WHITE = "\x1b[37m"
+const GRAY = "\x1b[90m"
+
+const CHECK = "✔"
+const CROSS = "✖"
+const WARN_ICON = "⚠"
+const INFO_ICON = "ℹ"
+const ARROW = "→"
+
+let _debugEnabled = false
+
+export fn enableDebug() {
+  _debugEnabled = true
+}
+
+export fn isDebugEnabled() {
+  return _debugEnabled
+}
+
+fn formatPrefix(scope) {
+  if (scope !== null && scope !== "") {
+    return `${CYAN}${BOLD}[sem]${RESET} ${MAGENTA}[${scope}]${RESET}`
+  }
+  return `${CYAN}${BOLD}[sem]${RESET}`
+}
+
+fn timestamp() {
+  let d = new Date()
+  let h = String(d.getHours()).padStart(2, "0")
+  let m = String(d.getMinutes()).padStart(2, "0")
+  let s = String(d.getSeconds()).padStart(2, "0")
+  return `${GRAY}${h}:${m}:${s}${RESET}`
+}
+
+export fn createLogger(scope) {
+  let prefix = formatPrefix(scope)
+
+  return {
+    log: fn(msg) {
+      console.log(`${prefix} ${msg}`)
+    },
+
+    info: fn(msg) {
+      console.log(`${prefix} ${BLUE}${INFO_ICON}${RESET} ${msg}`)
+    },
+
+    success: fn(msg) {
+      console.log(`${prefix} ${GREEN}${CHECK}${RESET} ${msg}`)
+    },
+
+    warn: fn(msg) {
+      console.log(`${prefix} ${YELLOW}${WARN_ICON}${RESET} ${YELLOW}${msg}${RESET}`)
+    },
+
+    error: fn(msg) {
+      console.log(`${prefix} ${RED}${CROSS}${RESET} ${RED}${msg}${RESET}`)
+    },
+
+    debug: fn(msg) {
+      if (_debugEnabled) {
+        console.log(`${prefix} ${GRAY}${msg}${RESET}`)
+      }
+    },
+
+    step: fn(msg) {
+      console.log(`${prefix} ${CYAN}${ARROW}${RESET} ${msg}`)
+    },
+
+    highlight: fn(label, value) {
+      console.log(`${prefix} ${BOLD}${label}:${RESET} ${GREEN}${value}${RESET}`)
+    },
+
+    blank: fn() {
+      console.log("")
+    }
+  }
+}
+
+// Global logger for the core
+export const log = createLogger(null)

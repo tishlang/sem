@@ -1,0 +1,54 @@
+// sem/src/utils/template.tish
+// Simple template engine for ${variable} interpolation with nested property access
+
+// Resolve a dotted path like "nextRelease.version" against a context object
+fn resolve(obj, path) {
+  let parts = path.split(".")
+  let current = obj
+  let i = 0
+  while (i < parts.length) {
+    if (current === null) return ""
+    let key = parts[i]
+    if (typeof current === "object" && current[key] !== null) {
+      current = current[key]
+    } else {
+      return ""
+    }
+    i = i + 1
+  }
+  if (current === null) return ""
+  return String(current)
+}
+
+// Render a template string with ${...} placeholders
+export fn render(template, context) {
+  if (template === null) return ""
+  if (context === null) return template
+
+  let result = ""
+  let i = 0
+  let len = template.length
+
+  while (i < len) {
+    if (i + 1 < len && template[i] === "$" && template[i + 1] === "{") {
+      // Find closing brace
+      let start = i + 2
+      let end = template.indexOf("}", start)
+      if (end === -1) {
+        // No closing brace, treat as literal
+        result = result + template[i]
+        i = i + 1
+      } else {
+        let path = template.slice(start, end).trim()
+        let value = resolve(context, path)
+        result = result + value
+        i = end + 1
+      }
+    } else {
+      result = result + template[i]
+      i = i + 1
+    }
+  }
+
+  return result
+}

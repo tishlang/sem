@@ -1,0 +1,80 @@
+// sem/src/plugins/changelog/index.tish
+// Clone of @semantic-release/changelog
+// Creates/updates CHANGELOG.md with release notes
+
+import { readFile, writeFile, fileExists } from "tish:fs"
+
+const DEFAULT_CHANGELOG = "CHANGELOG.md"
+const DEFAULT_TITLE = "# Changelog\n\nAll notable changes to this project will be automatically documented in this file.\n"
+
+// verifyConditions — check we can write to the changelog file
+export fn verifyConditions(pluginConfig, context) {
+  let logger = context.logger
+  let changelogFile = pluginConfig.changelogFile !== null ? pluginConfig.changelogFile : DEFAULT_CHANGELOG
+  let cwd = context.cwd
+
+  let fullPath = `${cwd}/${changelogFile}`
+
+  // Check if the directory is writable by trying to read/check
+  // We don't fail here if file doesn't exist — we'll create it
+  logger.info(`Changelog will be written to ${changelogFile}`)
+  return null
+}
+
+// prepare — prepend release notes to CHANGELOG.md
+export fn prepare(pluginConfig, context) {
+  let logger = context.logger
+  let changelogFile = pluginConfig.changelogFile !== null ? pluginConfig.changelogFile : DEFAULT_CHANGELOG
+  let changelogTitle = pluginConfig.changelogTitle !== null ? pluginConfig.changelogTitle : DEFAULT_TITLE
+  let cwd = context.cwd
+  let notes = context.nextRelease.notes
+
+  if (notes === null || notes === "") {
+    logger.warn("No release notes to write to changelog")
+    return null
+  }
+
+  let fullPath = `${cwd}/${changelogFile}`
+
+  // Read existing changelog
+  let existingContent = ""
+  if (fileExists(fullPath)) {
+    existingContent = readFile(fullPath)
+  } else {
+    logger.debug("No existing changelog found, creating new one")
+  }
+
+  let newContent = ""
+
+  if (existingContent === "" || existingContent === null) {
+    // Brand new changelog
+    newContent = changelogTitle + "\n" + notes + "\n"
+  } else {
+    // Prepend after the title
+    // Look for the first ## heading to insert before it
+    let titleEnd = -1
+    let lines = existingContent.split("\n")
+    let i = 0
+    while (i < lines.length) {
+      if (i > 0 && lines[i].startsWith("## ")) {
+        titleEnd = 0
+        let beforeEntries = lines.slice(0, i).join("\n")
+        let afterEntries = lines.slice(i).join("\n")
+        newContent = beforeEntries + "\n" + notes + "\n\n" + afterEntries
+        break
+      }
+      i = i + 1
+    }
+
+    if (titleEnd === -1) {
+      // No existing entries, append after all content
+      newContent = existingContent.trimEnd() + "\n\n" + notes + "\n"
+    }
+  }
+
+  // Write the file
+  writeFile(fullPath, newContent)
+
+  logger.success(`Updated ${changelogFile}`)
+  return null
+}

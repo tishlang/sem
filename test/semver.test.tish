@@ -1,0 +1,96 @@
+// sem/test/semver.test.tish
+// Unit tests for the semver module
+
+import { parse, format, increment, compare, gt, lt, eq, valid, clean, satisfiesRange } from "../src/semver.tish"
+
+let passed = 0
+let failed = 0
+
+fn assert(name, actual, expected) {
+  if (JSON.stringify(actual) === JSON.stringify(expected)) {
+    passed = passed + 1
+  } else {
+    failed = failed + 1
+    console.log(`  ✖ ${name}`)
+    console.log(`    expected: ${JSON.stringify(expected)}`)
+    console.log(`    actual:   ${JSON.stringify(actual)}`)
+  }
+}
+
+console.log("semver.tish tests")
+console.log("=================\n")
+
+// --- parse ---
+console.log("parse:")
+let p1 = parse("1.2.3")
+assert("parse 1.2.3 major", p1.major, 1)
+assert("parse 1.2.3 minor", p1.minor, 2)
+assert("parse 1.2.3 patch", p1.patch, 3)
+assert("parse 1.2.3 prerelease", p1.prerelease, null)
+
+let p2 = parse("v2.0.0-beta.1")
+assert("parse v2.0.0-beta.1 major", p2.major, 2)
+assert("parse v2.0.0-beta.1 prerelease", p2.prerelease, "beta.1")
+
+let p3 = parse("0.0.1+build.123")
+assert("parse 0.0.1+build.123 build", p3.build, "build.123")
+
+assert("parse invalid returns null", parse("not-a-version"), null)
+assert("parse null returns null", parse(null), null)
+
+// --- valid ---
+console.log("\nvalid:")
+assert("valid 1.0.0", valid("1.0.0"), true)
+assert("valid v1.0.0", valid("v1.0.0"), true)
+assert("valid garbage", valid("nope"), false)
+
+// --- clean ---
+console.log("\nclean:")
+assert("clean v1.2.3", clean("v1.2.3"), "1.2.3")
+assert("clean  1.2.3 ", clean("  1.2.3  "), "1.2.3")
+assert("clean v0.0.0-alpha.1", clean("v0.0.0-alpha.1"), "0.0.0-alpha.1")
+
+// --- format ---
+console.log("\nformat:")
+assert("format basic", format({ major: 1, minor: 2, patch: 3, prerelease: null, build: null }), "1.2.3")
+assert("format prerelease", format({ major: 1, minor: 0, patch: 0, prerelease: "rc.1", build: null }), "1.0.0-rc.1")
+
+// --- increment ---
+console.log("\nincrement:")
+assert("increment patch", increment("1.2.3", "patch", null), "1.2.4")
+assert("increment minor", increment("1.2.3", "minor", null), "1.3.0")
+assert("increment major", increment("1.2.3", "major", null), "2.0.0")
+assert("increment premajor", increment("1.2.3", "premajor", "alpha"), "2.0.0-alpha.0")
+assert("increment preminor", increment("1.2.3", "preminor", "beta"), "1.3.0-beta.0")
+assert("increment prepatch", increment("1.2.3", "prepatch", "rc"), "1.2.4-rc.0")
+assert("increment prerelease from pre", increment("1.0.0-alpha.0", "prerelease", null), "1.0.0-alpha.1")
+assert("increment prerelease from stable", increment("1.2.3", "prerelease", "beta"), "1.2.4-beta.0")
+assert("increment patch drops prerelease", increment("1.0.0-alpha.3", "patch", null), "1.0.0")
+
+// --- compare ---
+console.log("\ncompare:")
+assert("compare equal", compare("1.0.0", "1.0.0"), 0)
+assert("compare greater major", compare("2.0.0", "1.0.0"), 1)
+assert("compare lesser minor", compare("1.0.0", "1.1.0"), -1)
+assert("compare prerelease < release", compare("1.0.0-alpha.1", "1.0.0"), -1)
+assert("compare prerelease order", compare("1.0.0-alpha.1", "1.0.0-alpha.2"), -1)
+
+// --- gt, lt, eq ---
+console.log("\ncomparison helpers:")
+assert("gt true", gt("2.0.0", "1.0.0"), true)
+assert("gt false", gt("1.0.0", "2.0.0"), false)
+assert("lt true", lt("1.0.0", "2.0.0"), true)
+assert("eq true", eq("1.0.0", "1.0.0"), true)
+
+// --- satisfiesRange ---
+console.log("\nsatisfiesRange:")
+assert("satisfies >=", satisfiesRange("1.5.0", ">=1.0.0"), true)
+assert("satisfies x.y.x", satisfiesRange("1.2.5", "1.2.x"), true)
+assert("not satisfies x.y.x", satisfiesRange("1.3.0", "1.2.x"), false)
+
+// Summary
+console.log(`\n${"=".repeat(40)}`)
+console.log(`Results: ${passed} passed, ${failed} failed`)
+if (failed > 0) {
+  process.exit(1)
+}

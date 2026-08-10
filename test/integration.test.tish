@@ -1,0 +1,160 @@
+// sem/test/integration.test.tish
+// Integration test — creates a temp git repo, adds commits, and runs the pipeline
+
+import { loadConfig } from "../src/config.tish"
+import { release } from "../src/orchestrator.tish"
+import { enableDebug } from "../src/logger.tish"
+import { writeFile } from "tish:fs"
+
+let passed = 0
+let failed = 0
+
+fn assert(name, condition) {
+  if (condition) {
+    passed = passed + 1
+    console.log(`  ✔ ${name}`)
+  } else {
+    failed = failed + 1
+    console.log(`  ✖ ${name}`)
+  }
+}
+
+fn exec(cmd, cwd) {
+  let fullCmd = cwd !== null && cwd !== "." ? `cd "${cwd}" && ${cmd}` : cmd
+  let result = process.execCapture(fullCmd)
+  return result
+}
+
+fn setup() {
+  // Create a temp directory
+  let tmpResult = exec("mktemp -d", ".")
+  let tmpDir = tmpResult.stdout.trim()
+
+  // Init a git repo
+  exec("git init", tmpDir)
+  exec('git config user.email "test@sem.dev"', tmpDir)
+  exec('git config user.name "sem-test"', tmpDir)
+
+  // Create package.json
+  let pkg = JSON.stringify({
+    name: "test-package",
+    version: "0.0.0",
+    private: true,
+    sem: {
+      branches: ["main"],
+      plugins: [
+        "@sem/commit-analyzer",
+        "@sem/release-notes-generator"
+      ],
+      tagFormat: "v" + "$" + "{version}"
+    }
+  }, null, 2)
+
+  writeFile(`${tmpDir}/package.json`, pkg)
+  exec("git add .", tmpDir)
+  exec('git -c commit.gpgsign=false commit -m "initial commit"', tmpDir)
+
+  // Rename branch to main
+  exec("git branch -M main", tmpDir)
+
+  return tmpDir
+}
+
+fn addCommit(tmpDir, message) {
+  // Touch a file to make the commit non-empty
+  let timestamp = Date.now()
+  writeFile(`${tmpDir}/change-${timestamp}.txt`, `Change at ${timestamp}`)
+  exec("git add .", tmpDir)
+  exec(`git -c commit.gpgsign=false commit -m "${message}"`, tmpDir)
+}
+
+fn cleanup(tmpDir) {
+  exec(`rm -rf ${tmpDir}`, ".")
+}
+
+console.log("integration.test.tish")
+console.log("=====================\n")
+
+// enableDebug() // Uncomment for verbose output
+
+let tmpDir = setup()
+console.log(`Test repo: ${tmpDir}\n`)
+
+try {
+  // --- Test 1: First release with feat commit ---
+  console.log("Test 1: First release (feat → 0.1.0)")
+  addCommit(tmpDir, "feat: initial feature")
+  addCommit(tmpDir, "fix: initial fix")
+
+  let config1 = loadConfig(tmpDir, { dryRun: true, noCi: true })
+  let result1 = release(config1)
+
+  assert("release succeeded", result1.success)
+  assert("release was made", result1.released)
+  assert("version is 0.1.0", result1.version === "0.1.0")
+  assert("tag is v0.1.0", result1.tag === "v0.1.0")
+
+  // --- Actually create the tag for the next test ---
+  exec("git -c tag.gpgsign=false tag -a v0.1.0 -m v0.1.0", tmpDir)
+
+  // --- Test 2: Patch release ---
+  console.log("\nTest 2: Patch release (fix → 0.1.1)")
+  addCommit(tmpDir, "fix: patch fix")
+
+  let config2 = loadConfig(tmpDir, { dryRun: true, noCi: true })
+  let result2 = release(config2)
+
+  assert("patch release succeeded", result2.success)
+  assert("patch release was made", result2.released)
+  assert("patch version is 0.1.1", result2.version === "0.1.1")
+
+  exec("git -c tag.gpgsign=false tag -a v0.1.1 -m v0.1.1", tmpDir)
+
+  // --- Test 3: Minor release ---
+  console.log("\nTest 3: Minor release (feat → 0.2.0)")
+  addCommit(tmpDir, "feat: new feature")
+
+  let config3 = loadConfig(tmpDir, { dryRun: true, noCi: true })
+  let result3 = release(config3)
+
+  assert("minor release succeeded", result3.success)
+  assert("minor version is 0.2.0", result3.version === "0.2.0")
+
+  exec("git -c tag.gpgsign=false tag -a v0.2.0 -m v0.2.0", tmpDir)
+
+  // --- Test 4: Major release ---
+  console.log("\nTest 4: Major release (breaking → 1.0.0)")
+  addCommit(tmpDir, "feat!: breaking change")
+
+  let config4 = loadConfig(tmpDir, { dryRun: true, noCi: true })
+  let result4 = release(config4)
+
+  assert("major release succeeded", result4.success)
+  assert("major version is 1.0.0", result4.version === "1.0.0")
+
+  exec("git -c tag.gpgsign=false tag -a v1.0.0 -m v1.0.0", tmpDir)
+
+  // --- Test 5: No release needed ---
+  console.log("\nTest 5: No release (chore only)")
+  addCommit(tmpDir, "chore: update deps")
+  addCommit(tmpDir, "docs: update readme")
+
+  let config5 = loadConfig(tmpDir, { dryRun: true, noCi: true })
+  let result5 = release(config5)
+
+  assert("no release succeeded", result5.success)
+  assert("no release made", result5.released === false)
+
+} catch (e) {
+  console.log(`\n  ✖ Test error: ${e}`)
+  failed = failed + 1
+} finally {
+  cleanup(tmpDir)
+}
+
+// Summary
+console.log(`\n${"=".repeat(40)}`)
+console.log(`Results: ${passed} passed, ${failed} failed`)
+if (failed > 0) {
+  process.exit(1)
+}

@@ -1,0 +1,107 @@
+// sem/src/config.tish
+// Config loader — merges defaults, file config, and CLI overrides
+
+import { createLogger } from "./logger.tish"
+import { readFile } from "tish:fs"
+import { fileExists } from "tish:fs"
+
+const log = createLogger("config")
+
+const DEFAULT_CONFIG = {
+  branches: ["main", "master"],
+  plugins: [
+    "@sem/commit-analyzer",
+    "@sem/release-notes-generator",
+    "@sem/npm",
+    "@sem/github"
+  ],
+  tagFormat: "v" + "$" + "{version}",
+  dryRun: false,
+  ci: true,
+  noCi: false,
+  debug: false
+}
+
+// Config file search paths (in priority order)
+const CONFIG_FILES = [
+  ".semrc.json",
+  ".releaserc.json",
+  ".releaserc"
+]
+
+fn deepMerge(target, source) {
+  let result = { ...target }
+  let keys = Object.keys(source)
+  let i = 0
+  while (i < keys.length) {
+    let key = keys[i]
+    let val = source[key]
+    if (val !== null) {
+      result[key] = val
+    }
+    i = i + 1
+  }
+  return result
+}
+
+fn tryReadJson(path) {
+  if (!fileExists(path)) return null
+  let content = readFile(path)
+  if (content === null || typeof content !== "string" || content.trim() === "") return null
+  try {
+    return JSON.parse(content)
+  } catch (e) {
+    // Not valid JSON
+  }
+  return null
+}
+
+export fn loadConfig(cwd, cliOverrides) {
+  let config = { ...DEFAULT_CONFIG }
+  let configSource = "defaults"
+
+  // Try config files
+  let i = 0
+  while (i < CONFIG_FILES.length) {
+    let filePath = `${cwd}/${CONFIG_FILES[i]}`
+    let fileConfig = tryReadJson(filePath)
+    if (fileConfig !== null) {
+      config = deepMerge(config, fileConfig)
+      configSource = CONFIG_FILES[i]
+      log.info(`Loaded config from ${CONFIG_FILES[i]}`)
+      break
+    }
+    i = i + 1
+  }
+
+  // Try package.json "sem" or "release" key
+  if (configSource === "defaults") {
+    let pkgPath = `${cwd}/package.json`
+    let pkg = tryReadJson(pkgPath)
+    if (pkg !== null) {
+      if (pkg.sem !== null) {
+        config = deepMerge(config, pkg.sem)
+        configSource = 'package.json "sem"'
+        log.info('Loaded config from package.json "sem" key')
+      } else if (pkg.release !== null) {
+        config = deepMerge(config, pkg.release)
+        configSource = 'package.json "release"'
+        log.info('Loaded config from package.json "release" key')
+      }
+    }
+  }
+
+  if (configSource === "defaults") {
+    log.debug("Using default configuration")
+  }
+
+  // Apply CLI overrides
+  if (cliOverrides !== null) {
+    config = deepMerge(config, cliOverrides)
+  }
+
+  // Set cwd
+  config.cwd = cwd
+
+  return config
+}

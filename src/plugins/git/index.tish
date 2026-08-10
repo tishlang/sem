@@ -1,0 +1,112 @@
+// sem/src/plugins/git/index.tish
+// Clone of @semantic-release/git
+// Commits release artifacts (CHANGELOG.md, package.json, etc.) back to the repo
+
+import * as gitOps from "../../git.tish"
+import { render } from "../../utils/template.tish"
+import { match as globMatch } from "../../utils/glob.tish"
+
+const DEFAULT_ASSETS = [
+  "CHANGELOG.md",
+  "package.json",
+  "package-lock.json",
+  "npm-shrinkwrap.json"
+]
+
+const DEFAULT_MESSAGE = "chore(release): " + "$" + "{nextRelease.version} [skip ci]\n\n" + "$" + "{nextRelease.notes}"
+
+// verifyConditions — verify push access
+export fn verifyConditions(pluginConfig, context) {
+  let logger = context.logger
+
+  if (context.options.dryRun) {
+    logger.info("[dry-run] Skipping git auth verification")
+    return null
+  }
+
+  // We don't hard-fail here because git push --dry-run can fail
+  // for various non-auth reasons; just log
+  logger.info("Git push access will be verified during prepare")
+  return null
+}
+
+// prepare — stage, commit, and push release artifacts
+export fn prepare(pluginConfig, context) {
+  let logger = context.logger
+  let cwd = context.cwd
+
+  let assets = pluginConfig.assets !== null ? pluginConfig.assets : DEFAULT_ASSETS
+  let messageTemplate = pluginConfig.message !== null ? pluginConfig.message : DEFAULT_MESSAGE
+
+  // Render the commit message
+  let message = render(messageTemplate, {
+    nextRelease: context.nextRelease,
+    lastRelease: context.lastRelease,
+    branch: context.branch
+  })
+
+  // Truncate notes in commit message to avoid overly long commits
+  // Keep first 1000 chars of the message
+  if (message.length > 1500) {
+    message = message.slice(0, 1500) + "\n\n[truncated]"
+  }
+
+  if (context.options.dryRun) {
+    logger.info("[dry-run] Would commit and push:")
+    let ai = 0
+    while (ai < assets.length) {
+      logger.info(`  ${assets[ai]}`)
+      ai = ai + 1
+    }
+    return null
+  }
+
+  // Find files that match the asset patterns and actually exist
+  let filesToStage = []
+  let ai = 0
+  while (ai < assets.length) {
+    let pattern = assets[ai]
+    // For simple filenames (not globs), just add directly
+    if (!pattern.includes("*") && !pattern.includes("?")) {
+      filesToStage.push(pattern)
+    } else {
+      // Glob match
+      let findResult = process.execCapture(`cd "${cwd}" && find . -type f -name "${pattern}" -not -path "./.git/*"`)
+      if (findResult.code === 0 && findResult.stdout !== null) {
+        let found = findResult.stdout.trim().split("\n")
+        let fi = 0
+        while (fi < found.length) {
+          let f = found[fi].trim()
+          if (f !== "" && f !== ".") {
+            if (f.startsWith("./")) f = f.slice(2)
+            filesToStage.push(f)
+          }
+          fi = fi + 1
+        }
+      }
+    }
+    ai = ai + 1
+  }
+
+  if (filesToStage.length === 0) {
+    logger.info("No release artifacts to commit")
+    return null
+  }
+
+  // Stage and commit
+  let success = gitOps.addAndCommit(filesToStage, message, cwd)
+  if (!success) {
+    logger.warn("Git commit failed or no changes to commit")
+    return null
+  }
+
+  // Push
+  let branch = context.branch !== null ? context.branch.name : null
+  let pushSuccess = gitOps.push("origin", branch, false, cwd)
+  if (!pushSuccess) {
+    throw "Failed to push release commit to remote"
+  }
+
+  logger.success(`Committed and pushed release artifacts`)
+  return null
+}

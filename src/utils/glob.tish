@@ -1,0 +1,115 @@
+// sem/src/utils/glob.tish
+// Minimal glob matching for file patterns (*, **, ?)
+
+// Convert a glob pattern to a regex
+fn globToRegex(pattern) {
+  let result = "^"
+  let i = 0
+  let len = pattern.length
+
+  while (i < len) {
+    let ch = pattern[i]
+    if (ch === "*") {
+      if (i + 1 < len && pattern[i + 1] === "*") {
+        // ** matches everything including /
+        if (i + 2 < len && pattern[i + 2] === "/") {
+          result = result + "(?:.*/)?"
+          i = i + 3
+        } else {
+          result = result + ".*"
+          i = i + 2
+        }
+      } else {
+        // * matches everything except /
+        result = result + "[^/]*"
+        i = i + 1
+      }
+    } else if (ch === "?") {
+      result = result + "[^/]"
+      i = i + 1
+    } else if (ch === ".") {
+      result = result + "\\."
+      i = i + 1
+    } else if (ch === "(") {
+      result = result + "\\("
+      i = i + 1
+    } else if (ch === ")") {
+      result = result + "\\)"
+      i = i + 1
+    } else if (ch === "{") {
+      result = result + "("
+      i = i + 1
+    } else if (ch === "}") {
+      result = result + ")"
+      i = i + 1
+    } else if (ch === ",") {
+      // Inside braces, comma becomes alternation
+      result = result + "|"
+      i = i + 1
+    } else if (ch === "[") {
+      result = result + "["
+      i = i + 1
+    } else if (ch === "]") {
+      result = result + "]"
+      i = i + 1
+    } else if (ch === "\\") {
+      if (i + 1 < len) {
+        result = result + "\\" + pattern[i + 1]
+        i = i + 2
+      } else {
+        result = result + "\\\\"
+        i = i + 1
+      }
+    } else {
+      result = result + ch
+      i = i + 1
+    }
+  }
+
+  result = result + "$"
+  return result
+}
+
+// Test if a file path matches a glob pattern
+export fn match(pattern, filePath) {
+  if (pattern === null || filePath === null) return false
+
+  // Exact match fast path
+  if (pattern === filePath) return true
+
+  let regex = new RegExp(globToRegex(pattern))
+  return regex.test(filePath)
+}
+
+// Find files matching a glob pattern in a directory
+// Uses readDir from Tish fs feature
+export fn glob(pattern, cwd) {
+  let results = []
+  let basePath = cwd !== null ? cwd : "."
+
+  // Use process.exec to find files (since Tish readDir is flat)
+  let findResult = process.execCapture(`cd "${basePath}" && find . -type f`)
+  if (findResult.code !== 0) return results
+
+  let files = findResult.stdout.split("\n")
+  let i = 0
+  while (i < files.length) {
+    let file = files[i].trim()
+    if (file !== "") {
+      // Make relative to basePath
+      let relative = file
+      if (relative.startsWith(basePath + "/")) {
+        relative = relative.slice(basePath.length + 1)
+      }
+      if (relative.startsWith("./")) {
+        relative = relative.slice(2)
+      }
+      if (match(pattern, relative)) {
+        results.push(relative)
+      }
+    }
+    i = i + 1
+  }
+
+  return results
+}

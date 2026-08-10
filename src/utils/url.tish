@@ -1,0 +1,63 @@
+// sem/src/utils/url.tish
+// Parse git remote URLs to extract owner, repo, and host
+
+// Handles:
+//   https://github.com/user/repo.git
+//   https://github.com/user/repo
+//   git@github.com:user/repo.git
+//   ssh://git@github.com/user/repo.git
+//   git+https://github.com/user/repo.git
+
+const HTTPS_RE = /^(?:https?|git\+https?):\/\/([^/]+)\/([^/]+)\/([^/]+?)(?:\.git)?$/
+const SSH_RE = /^(?:ssh:\/\/)?git@([^:]+):([^/]+)\/([^/]+?)(?:\.git)?$/
+
+export fn parseGitUrl(remoteUrl) {
+  if (remoteUrl === null || remoteUrl.trim() === "") {
+    return null
+  }
+
+  let url = remoteUrl.trim()
+
+  // Try HTTPS format
+  let httpsMatch = url.match(HTTPS_RE)
+  if (httpsMatch !== null) {
+    return {
+      host: httpsMatch[1],
+      owner: httpsMatch[2],
+      repo: httpsMatch[3],
+      protocol: "https"
+    }
+  }
+
+  // Try SSH format
+  let sshMatch = url.match(SSH_RE)
+  if (sshMatch !== null) {
+    return {
+      host: sshMatch[1],
+      owner: sshMatch[2],
+      repo: sshMatch[3],
+      protocol: "ssh"
+    }
+  }
+
+  return null
+}
+
+// Build a GitHub compare URL
+export fn compareUrl(host, owner, repo, from, to) {
+  let baseHost = host !== null ? host : "github.com"
+  return `https://${baseHost}/${owner}/${repo}/compare/${from}...${to}`
+}
+
+// Build a GitHub commit URL
+export fn commitUrl(host, owner, repo, hash) {
+  let baseHost = host !== null ? host : "github.com"
+  let shortHash = hash.length > 7 ? hash.slice(0, 7) : hash
+  return `https://${baseHost}/${owner}/${repo}/commit/${hash}`
+}
+
+// Build a GitHub issue URL
+export fn issueUrl(host, owner, repo, issue) {
+  let baseHost = host !== null ? host : "github.com"
+  return `https://${baseHost}/${owner}/${repo}/issues/${issue}`
+}

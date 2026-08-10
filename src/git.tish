@@ -1,0 +1,194 @@
+// sem/src/git.tish
+// Git operations using Tish process.exec()
+
+import { createLogger } from "./logger.tish"
+
+const log = createLogger("git")
+const COMMIT_DELIMITER = "---sem-commit-delimiter---"
+
+fn execGit(args, cwd) {
+  let gitCmd = `git ${args}`
+  log.debug(`exec: ${gitCmd}`)
+  let cmd = cwd !== null ? `cd "${cwd}" && ${gitCmd}` : gitCmd
+  let result = process.execCapture(cmd)
+  if (result.code !== 0) {
+    let errMsg = result.stderr !== null ? result.stderr.trim() : `git command failed with code ${result.code}`
+    log.debug(`stderr: ${errMsg}`)
+    return { ok: false, output: "", error: errMsg }
+  }
+  let output = result.stdout !== null ? result.stdout.trim() : ""
+  return { ok: true, output: output, error: null }
+}
+
+// Get all semver tags sorted by version descending
+export fn getTags(cwd) {
+  let result = execGit("tag -l --sort=-v:refname", cwd)
+  if (!result.ok || result.output === "") return []
+  return result.output.split("\n").map(fn(t) { return t.trim() }).filter(fn(t) { return t !== "" })
+}
+
+// Get the last semver tag matching the tag format
+export fn getLastTag(tagFormat, cwd) {
+  let tags = getTags(cwd)
+  if (tags.length === 0) return null
+
+  // Filter to tags that look like semver (v1.2.3 or 1.2.3)
+  let semverRe = /^v?\d+\.\d+\.\d+/
+  let semverTags = tags.filter(fn(t) { return t.match(semverRe) !== null })
+  if (semverTags.length === 0) return null
+
+  return semverTags[0] // Already sorted descending
+}
+
+// Get the SHA for a given ref
+export fn getSha(ref, cwd) {
+  let result = execGit(`rev-parse ${ref}`, cwd)
+  if (!result.ok) return null
+  return result.output
+}
+
+// Get raw commit log since a given ref (or all if null)
+export fn getCommitLog(from, to, cwd) {
+  let range = ""
+  if (from !== null && to !== null) {
+    range = `${from}..${to}`
+  } else if (from !== null) {
+    range = `${from}..HEAD`
+  }
+
+  let format = `${COMMIT_DELIMITER}%H%n%B`
+  let result = execGit(`log ${range} --format="${format}"`, cwd)
+  if (!result.ok) return []
+
+  let entries = result.output.split(COMMIT_DELIMITER)
+  let commits = []
+  let i = 0
+  while (i < entries.length) {
+    let entry = entries[i].trim()
+    if (entry !== "") {
+      let nlIdx = entry.indexOf("\n")
+      if (nlIdx !== -1) {
+        let hash = entry.slice(0, nlIdx).trim()
+        let message = entry.slice(nlIdx + 1).trim()
+        commits.push({ hash: hash, message: message })
+      }
+    }
+    i = i + 1
+  }
+  return commits
+}
+
+// Get commit messages since a tag
+export fn getCommitsSince(since, cwd) {
+  return getCommitLog(since, "HEAD", cwd)
+}
+
+// Get current branch name
+export fn getCurrentBranch(cwd) {
+  let result = execGit("rev-parse --abbrev-ref HEAD", cwd)
+  if (!result.ok) return null
+  return result.output
+}
+
+// Get current HEAD SHA
+export fn getHead(cwd) {
+  return getSha("HEAD", cwd)
+}
+
+// Get remote URL for origin
+export fn getRemoteUrl(cwd) {
+  let result = execGit("remote get-url origin", cwd)
+  if (!result.ok) return null
+  return result.output
+}
+
+// Create a tag
+export fn tag(tagName, sha, cwd) {
+  let ref = sha !== null ? sha : "HEAD"
+  // Use -a -m to create annotated tag, and disable gpg signing to work in non-interactive envs
+  let result = execGit(`-c tag.gpgsign=false tag -a ${tagName} -m "${tagName}" ${ref}`, cwd)
+  if (!result.ok) {
+    log.error(`Failed to create tag ${tagName}: ${result.error}`)
+    return false
+  }
+  log.debug(`Created tag ${tagName}`)
+  return true
+}
+
+// Push to remote
+export fn push(remote, branch, pushTags, cwd) {
+  let remoteName = remote !== null ? remote : "origin"
+  let branchName = branch !== null ? branch : ""
+  let cmd = `push ${remoteName} ${branchName}`
+  if (pushTags) {
+    cmd = cmd + " --tags"
+  }
+  let result = execGit(cmd, cwd)
+  if (!result.ok) {
+    log.error(`Failed to push: ${result.error}`)
+    return false
+  }
+  return true
+}
+
+// Stage files and commit
+export fn addAndCommit(files, message, cwd) {
+  // Stage files
+  let i = 0
+  while (i < files.length) {
+    let addResult = execGit(`add "${files[i]}"`, cwd)
+    if (!addResult.ok) {
+      log.warn(`Could not stage ${files[i]}: ${addResult.error}`)
+    }
+    i = i + 1
+  }
+
+  // Check if there are staged changes
+  let diffResult = execGit("diff --cached --quiet", cwd)
+  if (diffResult.ok) {
+    log.debug("No staged changes to commit")
+    return true
+  }
+
+  // Commit (disable gpg signing for non-interactive envs)
+  let escapedMsg = message.replace(/"/g, '\\"')
+  let commitResult = execGit(`-c commit.gpgsign=false commit -m "${escapedMsg}"`, cwd)
+  if (!commitResult.ok) {
+    log.error(`Failed to commit: ${commitResult.error}`)
+    return false
+  }
+  log.debug("Committed release artifacts")
+  return true
+}
+
+// Verify we have push access
+export fn verifyAuth(cwd) {
+  let result = execGit("push --dry-run", cwd)
+  return result.ok
+}
+
+// Check if branch is up to date with remote
+export fn isBranchUpToDate(branch, remote, cwd) {
+  let remoteName = remote !== null ? remote : "origin"
+  // Fetch first
+  execGit(`fetch ${remoteName}`, cwd)
+
+  let localSha = getSha(branch, cwd)
+  let remoteSha = getSha(`${remoteName}/${branch}`, cwd)
+
+  if (localSha === null || remoteSha === null) return false
+  return localSha === remoteSha
+}
+
+// Check if current directory is a git repo
+export fn isGitRepo(cwd) {
+  let result = execGit("rev-parse --is-inside-work-tree", cwd)
+  return result.ok && result.output === "true"
+}
+
+// Get repo root directory
+export fn getRepoRoot(cwd) {
+  let result = execGit("rev-parse --show-toplevel", cwd)
+  if (!result.ok) return null
+  return result.output
+}

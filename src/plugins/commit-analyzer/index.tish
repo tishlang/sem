@@ -1,0 +1,106 @@
+// sem/src/plugins/commit-analyzer/index.tish
+// Clone of @semantic-release/commit-analyzer
+// Determines the release type (major/minor/patch) from commits
+
+import { parseCommit } from "../../commit-parser.tish"
+
+// Default release rules (Angular preset)
+const DEFAULT_RELEASE_RULES = [
+  { breaking: true, release: "major" },
+  { type: "feat", release: "minor" },
+  { type: "fix", release: "patch" },
+  { type: "perf", release: "patch" }
+]
+
+// Release type priority for comparison
+const RELEASE_PRIORITY = {
+  major: 3,
+  minor: 2,
+  patch: 1
+}
+
+fn getPriority(releaseType) {
+  if (releaseType === null) return 0
+  let p = RELEASE_PRIORITY[releaseType]
+  return p !== null ? p : 0
+}
+
+// Check if a commit matches a release rule
+fn matchesRule(commit, rule) {
+  // Breaking change rule
+  if (rule.breaking === true && commit.breaking) {
+    return true
+  }
+
+  // Type-based rule
+  if (rule.type !== null && commit.type === rule.type) {
+    // If rule has scope, check scope too
+    if (rule.scope !== null) {
+      return commit.scope === rule.scope
+    }
+    return true
+  }
+
+  return false
+}
+
+// analyzeCommits lifecycle hook
+export fn analyzeCommits(pluginConfig, context) {
+  let logger = context.logger
+  let commits = context.commits
+
+  if (commits === null || commits.length === 0) {
+    logger.info("No commits to analyze")
+    return null
+  }
+
+  // Merge custom release rules with defaults
+  let releaseRules = DEFAULT_RELEASE_RULES
+  if (pluginConfig.releaseRules !== null && Array.isArray(pluginConfig.releaseRules)) {
+    // Custom rules take precedence — prepend them
+    releaseRules = pluginConfig.releaseRules.concat(DEFAULT_RELEASE_RULES)
+  }
+
+  let highestRelease = null
+  let highestPriority = 0
+
+  // Count by type for logging
+  let counts = { major: 0, minor: 0, patch: 0 }
+
+  let i = 0
+  while (i < commits.length) {
+    let commit = commits[i]
+
+    // Try each rule
+    let j = 0
+    while (j < releaseRules.length) {
+      let rule = releaseRules[j]
+      if (matchesRule(commit, rule)) {
+        let priority = getPriority(rule.release)
+        if (rule.release !== null) {
+          counts[rule.release] = (counts[rule.release] !== null ? counts[rule.release] : 0) + 1
+        }
+        if (priority > highestPriority) {
+          highestPriority = priority
+          highestRelease = rule.release
+        }
+        break // First matching rule wins for this commit
+      }
+      j = j + 1
+    }
+
+    i = i + 1
+  }
+
+  if (highestRelease !== null) {
+    logger.info(`Found ${commits.length} commits`)
+    if (counts.major > 0) logger.info(`  ${counts.major} breaking change${counts.major > 1 ? "s" : ""}`)
+    if (counts.minor > 0) logger.info(`  ${counts.minor} feature${counts.minor > 1 ? "s" : ""}`)
+    if (counts.patch > 0) logger.info(`  ${counts.patch} fix${counts.patch > 1 ? "es" : ""}`)
+    logger.info(`Analysis complete: ${highestRelease} release`)
+  } else {
+    logger.info(`No release-triggering commits found in ${commits.length} commits`)
+  }
+
+  return highestRelease
+}

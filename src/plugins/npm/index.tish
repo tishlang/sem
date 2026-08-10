@@ -1,0 +1,176 @@
+// sem/src/plugins/npm/index.tish
+// Clone of @semantic-release/npm
+// Updates package.json version and publishes to npm registry
+
+import { readFile, writeFile, fileExists } from "tish:fs"
+
+// verifyConditions — check npm auth
+export fn verifyConditions(pluginConfig, context) {
+  let logger = context.logger
+  let env = context.env
+
+  let npmPublish = pluginConfig.npmPublish !== null ? pluginConfig.npmPublish : true
+  if (!npmPublish) {
+    logger.info("npm publish is disabled")
+    return null
+  }
+
+  // Check for NPM_TOKEN
+  let token = env.NPM_TOKEN
+  if (token === null || token === "") {
+    // Try .npmrc or npm whoami
+    let result = process.execCapture(`cd "${context.cwd}" && npm whoami`)
+    if (result.code !== 0) {
+      throw "npm authentication failed. Set NPM_TOKEN or run 'npm login'."
+    }
+    logger.info(`Authenticated as: ${result.stdout.trim()}`)
+  } else {
+    logger.info("NPM_TOKEN is set")
+  }
+
+  // Verify package.json exists
+  let pkgRoot = pluginConfig.pkgRoot !== null ? pluginConfig.pkgRoot : "."
+  let pkgPath = `${context.cwd}/${pkgRoot}/package.json`
+  if (!fileExists(pkgPath)) {
+    throw `Cannot find package.json at ${pkgPath}`
+  }
+  let content = readFile(pkgPath)
+  let pkg = JSON.parse(content)
+  if (pkg.name === null) {
+    throw "package.json is missing 'name' field"
+  }
+  logger.info(`Package: ${pkg.name}`)
+
+  // Check if private
+  if (pkg.private === true) {
+    logger.warn("Package is marked as private — npm publish will be skipped")
+  }
+
+  return null
+}
+
+// prepare — update version in package.json
+export fn prepare(pluginConfig, context) {
+  let logger = context.logger
+  let version = context.nextRelease.version
+  let pkgRoot = pluginConfig.pkgRoot !== null ? pluginConfig.pkgRoot : "."
+  let cwd = context.cwd
+
+  // Update package.json
+  let pkgPath = `${cwd}/${pkgRoot}/package.json`
+  let content = readFile(pkgPath)
+  let pkg = JSON.parse(content)
+  pkg.version = version
+  writeFile(pkgPath, JSON.stringify(pkg, null, 2) + "\n")
+  logger.success(`Updated package.json version to ${version}`)
+
+  // Update package-lock.json if it exists
+  let lockPath = `${cwd}/${pkgRoot}/package-lock.json`
+  if (fileExists(lockPath)) {
+    let lockContent = readFile(lockPath)
+    let lock = JSON.parse(lockContent)
+    lock.version = version
+    if (lock.packages !== null && lock.packages[""] !== null) {
+      lock.packages[""].version = version
+    }
+    writeFile(lockPath, JSON.stringify(lock, null, 2) + "\n")
+    logger.success("Updated package-lock.json version")
+  } else {
+    logger.debug("No package-lock.json to update")
+  }
+
+  return null
+}
+
+// publish — run npm publish
+export fn publish(pluginConfig, context) {
+  let logger = context.logger
+  let npmPublish = pluginConfig.npmPublish !== null ? pluginConfig.npmPublish : true
+  let pkgRoot = pluginConfig.pkgRoot !== null ? pluginConfig.pkgRoot : "."
+  let cwd = context.cwd
+
+  // Read package.json to check if private
+  let pkgPath = `${cwd}/${pkgRoot}/package.json`
+  let content = readFile(pkgPath)
+  let pkg = JSON.parse(content)
+
+  if (pkg.private === true) {
+    logger.info("Package is private, skipping npm publish")
+    return null
+  }
+
+  if (!npmPublish) {
+    logger.info("npm publish is disabled via config")
+    return null
+  }
+
+  if (context.options.dryRun) {
+    logger.info(`[dry-run] Would publish ${pkg.name}@${context.nextRelease.version}`)
+    return {
+      name: "npm",
+      url: `https://www.npmjs.com/package/${pkg.name}/v/${context.nextRelease.version}`
+    }
+  }
+
+  // Build the publish command
+  let cmd = "npm publish"
+
+  // Add dist-tag for channels
+  let channel = context.nextRelease.channel
+  if (channel !== null && channel !== "" && channel !== "latest") {
+    cmd = cmd + ` --tag ${channel}`
+  }
+
+  // Set registry auth via NPM_TOKEN
+  let env = context.env
+  if (env.NPM_TOKEN !== null && env.NPM_TOKEN !== "") {
+    cmd = `NPM_TOKEN=${env.NPM_TOKEN} ${cmd}`
+  }
+
+  let publishDir = `${cwd}/${pkgRoot}`
+  let result = process.execCapture(`cd "${publishDir}" && ${cmd}`)
+
+  if (result.code !== 0) {
+    let errMsg = result.stderr !== null ? result.stderr.trim() : "npm publish failed"
+    throw `npm publish failed: ${errMsg}`
+  }
+
+  logger.success(`Published ${pkg.name}@${context.nextRelease.version} to npm`)
+
+  return {
+    name: "npm",
+    url: `https://www.npmjs.com/package/${pkg.name}/v/${context.nextRelease.version}`
+  }
+}
+
+// addChannel — add npm dist-tag
+export fn addChannel(pluginConfig, context) {
+  let logger = context.logger
+  let pkgRoot = pluginConfig.pkgRoot !== null ? pluginConfig.pkgRoot : "."
+  let cwd = context.cwd
+
+  let pkgPath = `${cwd}/${pkgRoot}/package.json`
+  let content = readFile(pkgPath)
+  let pkg = JSON.parse(content)
+
+  let channel = context.nextRelease.channel
+  if (channel === null || channel === "") {
+    channel = "latest"
+  }
+
+  if (context.options.dryRun) {
+    logger.info(`[dry-run] Would add dist-tag ${channel} to ${pkg.name}@${context.nextRelease.version}`)
+    return null
+  }
+
+  let cmd = `npm dist-tag add ${pkg.name}@${context.nextRelease.version} ${channel}`
+  let result = process.execCapture(`cd "${cwd}" && ${cmd}`)
+
+  if (result.code !== 0) {
+    logger.warn(`Failed to add dist-tag: ${result.stderr}`)
+  } else {
+    logger.success(`Added dist-tag ${channel} to ${pkg.name}@${context.nextRelease.version}`)
+  }
+
+  return null
+}

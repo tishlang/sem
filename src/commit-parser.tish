@@ -1,0 +1,214 @@
+// sem/src/commit-parser.tish
+// Conventional Commits parser — parses raw commit messages into structured objects
+
+const HEADER_RE = /^(\w+)(\(([^)]*)\))?(!)?:\s*(.+)$/
+const REVERT_RE = /^[Rr]evert\s+"?(.+)"?/
+const MERGE_RE = /^[Mm]erge\s+(?:pull request|branch|commit)\s+/
+const REFERENCE_RE = /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi
+const MENTION_RE = /@([a-zA-Z0-9_-]+)/g
+const FOOTER_TOKEN_RE = /^([A-Za-z-]+):\s*(.+)$/
+const FOOTER_HASH_RE = /^([A-Za-z-]+)\s+#(.+)$/
+const BREAKING_KEYWORDS = ["BREAKING CHANGE", "BREAKING-CHANGE"]
+
+export fn parseCommit(rawMessage, hash) {
+  if (rawMessage === null || rawMessage.trim() === "") {
+    return null
+  }
+
+  let lines = rawMessage.split("\n")
+  let headerLine = lines[0].trim()
+
+  let commit = {
+    type: null,
+    scope: null,
+    subject: null,
+    header: headerLine,
+    body: null,
+    footer: null,
+    breaking: false,
+    breakingDescription: null,
+    mentions: [],
+    references: [],
+    hash: hash !== null ? hash : null,
+    merge: null,
+    revert: null,
+    raw: rawMessage
+  }
+
+  // Check for merge commit
+  let mergeMatch = headerLine.match(MERGE_RE)
+  if (mergeMatch !== null) {
+    commit.merge = headerLine
+  }
+
+  // Check for revert commit
+  let revertMatch = headerLine.match(REVERT_RE)
+  if (revertMatch !== null) {
+    commit.revert = revertMatch[1]
+  }
+
+  // Parse conventional commit header
+  let headerMatch = headerLine.match(HEADER_RE)
+  if (headerMatch !== null) {
+    commit.type = headerMatch[1]
+    commit.scope = headerMatch[3] !== null ? headerMatch[3] : null
+    if (headerMatch[4] === "!") {
+      commit.breaking = true
+    }
+    commit.subject = headerMatch[5]
+  }
+
+  // Separate body and footer
+  // Body starts after first blank line, footer starts at the last group of
+  // lines that look like token: value or token #value patterns
+  if (lines.length > 1) {
+    let bodyLines = []
+    let footerLines = []
+    let inBody = false
+    let pastBlankLine = false
+    let i = 1
+
+    // Find first blank line to start body
+    while (i < lines.length) {
+      let line = lines[i]
+      if (!pastBlankLine) {
+        if (line.trim() === "") {
+          pastBlankLine = true
+        }
+      } else {
+        bodyLines.push(line)
+      }
+      i = i + 1
+    }
+
+    // Now separate footer from body
+    // Footer lines are trailing lines matching token patterns
+    if (bodyLines.length > 0) {
+      let footerStart = -1
+      let j = bodyLines.length - 1
+      while (j >= 0) {
+        let trimmed = bodyLines[j].trim()
+        if (trimmed === "") {
+          // blank line might separate body from footer
+          if (footerStart !== -1) {
+            break
+          }
+          j = j - 1
+          continue
+        }
+        let isFooterLine = false
+        let tokenMatch = trimmed.match(FOOTER_TOKEN_RE)
+        if (tokenMatch !== null) isFooterLine = true
+        let hashMatch = trimmed.match(FOOTER_HASH_RE)
+        if (hashMatch !== null) isFooterLine = true
+        // Also check for BREAKING CHANGE multi-word token
+        if (trimmed.startsWith("BREAKING CHANGE:") || trimmed.startsWith("BREAKING-CHANGE:")) {
+          isFooterLine = true
+        }
+
+        if (isFooterLine) {
+          footerStart = j
+        } else {
+          break
+        }
+        j = j - 1
+      }
+
+      if (footerStart !== -1) {
+        footerLines = bodyLines.slice(footerStart)
+        bodyLines = bodyLines.slice(0, footerStart)
+      }
+    }
+
+    // Clean up body
+    let bodyText = bodyLines.join("\n").trim()
+    if (bodyText !== "") {
+      commit.body = bodyText
+    }
+
+    // Parse footer
+    let footerText = footerLines.join("\n").trim()
+    if (footerText !== "") {
+      commit.footer = footerText
+    }
+
+    // Check footer for BREAKING CHANGE
+    let fi = 0
+    while (fi < footerLines.length) {
+      let fline = footerLines[fi].trim()
+      let bk = 0
+      while (bk < BREAKING_KEYWORDS.length) {
+        let keyword = BREAKING_KEYWORDS[bk]
+        if (fline.startsWith(keyword + ":")) {
+          commit.breaking = true
+          commit.breakingDescription = fline.slice(keyword.length + 1).trim()
+        }
+        bk = bk + 1
+      }
+      fi = fi + 1
+    }
+
+    // Also check body for BREAKING CHANGE (older convention)
+    if (commit.body !== null) {
+      let bk2 = 0
+      while (bk2 < BREAKING_KEYWORDS.length) {
+        if (commit.body.includes(BREAKING_KEYWORDS[bk2])) {
+          commit.breaking = true
+        }
+        bk2 = bk2 + 1
+      }
+    }
+  }
+
+  // Extract references from the entire message using exec() loop
+  let refRe = /(?:Closes|Closed|Close|Fixes|Fixed|Fix|Resolves|Resolved|Resolve)\s+#(\d+)/g
+  let refMatch = refRe.exec(rawMessage)
+  while (refMatch !== null) {
+    let actionMatch = refMatch[0].match(/^(\w+)\s+#/)
+    let action = actionMatch !== null ? actionMatch[1].toLowerCase() : "close"
+    commit.references.push({
+      action: action,
+      issue: refMatch[1]
+    })
+    refMatch = refRe.exec(rawMessage)
+  }
+
+  // Extract mentions using exec() loop
+  let mentionRe = /@([a-zA-Z0-9_-]+)/g
+  let mentionMatch = mentionRe.exec(rawMessage)
+  while (mentionMatch !== null) {
+    commit.mentions.push(mentionMatch[1])
+    mentionMatch = mentionRe.exec(rawMessage)
+  }
+
+  return commit
+}
+
+// Parse multiple commits from a git log output
+// Each commit is delimited by a separator
+export fn parseCommits(rawLog, separator) {
+  if (rawLog === null || rawLog.trim() === "") return []
+  let sep = separator !== null ? separator : "---commit-delimiter---"
+  let entries = rawLog.split(sep)
+  let commits = []
+  let i = 0
+  while (i < entries.length) {
+    let entry = entries[i].trim()
+    if (entry !== "") {
+      // Format: hash\nmessage
+      let nlIdx = entry.indexOf("\n")
+      let hash = null
+      let message = entry
+      if (nlIdx !== -1) {
+        hash = entry.slice(0, nlIdx).trim()
+        message = entry.slice(nlIdx + 1)
+      }
+      let parsed = parseCommit(message, hash)
+      if (parsed !== null) {
+        commits.push(parsed)
+      }
+    }
+    i = i + 1
+  }
+  return commits
+}

@@ -1,0 +1,195 @@
+// sem/src/plugin-loader.tish
+// Plugin resolution, loading, and lifecycle execution
+
+import { createLogger } from "./logger.tish"
+
+// Import all built-in plugins
+import * as commitAnalyzer from "./plugins/commit-analyzer/index.tish"
+import * as releaseNotesGenerator from "./plugins/release-notes-generator/index.tish"
+import * as changelogPlugin from "./plugins/changelog/index.tish"
+import * as npmPlugin from "./plugins/npm/index.tish"
+import * as githubPlugin from "./plugins/github/index.tish"
+import * as gitPlugin from "./plugins/git/index.tish"
+
+const log = createLogger("plugins")
+
+// All lifecycle steps in execution order
+export const LIFECYCLE_STEPS = [
+  "verifyConditions",
+  "analyzeCommits",
+  "verifyRelease",
+  "generateNotes",
+  "prepare",
+  "publish",
+  "addChannel",
+  "success",
+  "fail"
+]
+
+// Registry of built-in plugins
+const PLUGIN_REGISTRY = {
+  "@sem/commit-analyzer": commitAnalyzer,
+  "@sem/release-notes-generator": releaseNotesGenerator,
+  "@sem/changelog": changelogPlugin,
+  "@sem/npm": npmPlugin,
+  "@sem/github": githubPlugin,
+  "@sem/git": gitPlugin
+}
+
+// Resolve a plugin config entry to { name, module, config }
+fn resolvePlugin(pluginEntry) {
+  let name = null
+  let pluginConfig = {}
+
+  if (typeof pluginEntry === "string") {
+    name = pluginEntry
+  } else if (Array.isArray(pluginEntry) && pluginEntry.length >= 1) {
+    name = pluginEntry[0]
+    if (pluginEntry.length >= 2 && pluginEntry[1] !== null) {
+      pluginConfig = pluginEntry[1]
+    }
+  } else {
+    log.error(`Invalid plugin entry: ${JSON.stringify(pluginEntry)}`)
+    return null
+  }
+
+  let pluginModule = PLUGIN_REGISTRY[name]
+  if (pluginModule === null) {
+    log.error(`Unknown plugin: ${name}`)
+    return null
+  }
+
+  return {
+    name: name,
+    module: pluginModule,
+    config: pluginConfig
+  }
+}
+
+// Load all plugins from config and organize by lifecycle step
+export fn loadPlugins(pluginConfigs) {
+  let plugins = []
+  let i = 0
+  while (i < pluginConfigs.length) {
+    let resolved = resolvePlugin(pluginConfigs[i])
+    if (resolved !== null) {
+      plugins.push(resolved)
+      log.debug(`Loaded plugin: ${resolved.name}`)
+    }
+    i = i + 1
+  }
+
+  // Organize by lifecycle step
+  let byStep = {}
+  let si = 0
+  while (si < LIFECYCLE_STEPS.length) {
+    let step = LIFECYCLE_STEPS[si]
+    byStep[step] = []
+    let pi = 0
+    while (pi < plugins.length) {
+      let plugin = plugins[pi]
+      if (typeof plugin.module[step] === "function") {
+        byStep[step].push(plugin)
+      }
+      pi = pi + 1
+    }
+    si = si + 1
+  }
+
+  return { plugins: plugins, byStep: byStep }
+}
+
+// Run all plugins for a given lifecycle step
+export fn runPlugins(step, plugins, context) {
+  let results = []
+  let pluginsForStep = plugins.byStep[step]
+
+  if (pluginsForStep === null || pluginsForStep.length === 0) {
+    log.debug(`No plugins for step: ${step}`)
+    return results
+  }
+
+  log.step(`Running ${step} (${pluginsForStep.length} plugin${pluginsForStep.length > 1 ? "s" : ""})`)
+
+  let i = 0
+  while (i < pluginsForStep.length) {
+    let plugin = pluginsForStep[i]
+    let pluginLogger = createLogger(plugin.name)
+
+    try {
+      let result = plugin.module[step](plugin.config, {
+        ...context,
+        logger: pluginLogger
+      })
+      if (result !== null) {
+        results.push(result)
+      }
+      log.debug(`${plugin.name}.${step} completed`)
+    } catch (err) {
+      log.error(`${plugin.name}.${step} failed: ${err}`)
+      throw err
+    }
+
+    i = i + 1
+  }
+
+  return results
+}
+
+// Run plugins for analyzeCommits — special case: first non-null result wins
+export fn runAnalyzeCommits(plugins, context) {
+  let pluginsForStep = plugins.byStep["analyzeCommits"]
+  if (pluginsForStep === null || pluginsForStep.length === 0) {
+    return null
+  }
+
+  log.step(`Running analyzeCommits (${pluginsForStep.length} plugin${pluginsForStep.length > 1 ? "s" : ""})`)
+
+  let i = 0
+  while (i < pluginsForStep.length) {
+    let plugin = pluginsForStep[i]
+    let pluginLogger = createLogger(plugin.name)
+
+    let result = plugin.module.analyzeCommits(plugin.config, {
+      ...context,
+      logger: pluginLogger
+    })
+
+    if (result !== null) {
+      log.debug(`${plugin.name}.analyzeCommits returned: ${result}`)
+      return result
+    }
+    i = i + 1
+  }
+
+  return null
+}
+
+// Run plugins for generateNotes — special case: concatenate all results
+export fn runGenerateNotes(plugins, context) {
+  let pluginsForStep = plugins.byStep["generateNotes"]
+  if (pluginsForStep === null || pluginsForStep.length === 0) {
+    return ""
+  }
+
+  log.step(`Running generateNotes (${pluginsForStep.length} plugin${pluginsForStep.length > 1 ? "s" : ""})`)
+
+  let notes = []
+  let i = 0
+  while (i < pluginsForStep.length) {
+    let plugin = pluginsForStep[i]
+    let pluginLogger = createLogger(plugin.name)
+
+    let result = plugin.module.generateNotes(plugin.config, {
+      ...context,
+      logger: pluginLogger
+    })
+
+    if (result !== null && result !== "") {
+      notes.push(result)
+    }
+    i = i + 1
+  }
+
+  return notes.join("\n\n")
+}

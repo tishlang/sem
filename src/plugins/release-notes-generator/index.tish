@@ -1,0 +1,202 @@
+// sem/src/plugins/release-notes-generator/index.tish
+// Clone of @semantic-release/release-notes-generator
+// Generates markdown release notes from parsed commits
+
+import { parseGitUrl, compareUrl, commitUrl } from "../../utils/url.tish"
+
+// Angular-style type groups and their display names
+const TYPE_GROUPS = [
+  { type: "feat", title: "Features" },
+  { type: "fix", title: "Bug Fixes" },
+  { type: "perf", title: "Performance Improvements" },
+  { type: "revert", title: "Reverts" },
+  { type: "docs", title: "Documentation" },
+  { type: "style", title: "Styles" },
+  { type: "refactor", title: "Code Refactoring" },
+  { type: "test", title: "Tests" },
+  { type: "build", title: "Build System" },
+  { type: "ci", title: "Continuous Integration" },
+  { type: "chore", title: "Chores" }
+]
+
+// Only these types are included in release notes by default
+const VISIBLE_TYPES = ["feat", "fix", "perf", "revert"]
+
+fn getGroupTitle(type) {
+  let i = 0
+  while (i < TYPE_GROUPS.length) {
+    if (TYPE_GROUPS[i].type === type) return TYPE_GROUPS[i].title
+    i = i + 1
+  }
+  return null
+}
+
+fn isVisibleType(type, includeAll) {
+  if (includeAll) return true
+  let i = 0
+  while (i < VISIBLE_TYPES.length) {
+    if (VISIBLE_TYPES[i] === type) return true
+    i = i + 1
+  }
+  return false
+}
+
+fn formatDate(d) {
+  if (d === null) {
+    d = new Date()
+  }
+  let year = d.getFullYear()
+  let month = String(d.getMonth() + 1).padStart(2, "0")
+  let day = String(d.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+fn formatCommitLine(commit, repoInfo) {
+  let line = "* "
+
+  // Add scope
+  if (commit.scope !== null) {
+    line = line + `**${commit.scope}:** `
+  }
+
+  // Add subject
+  line = line + commit.subject
+
+  // Add commit link
+  if (commit.hash !== null && repoInfo !== null) {
+    let shortHash = commit.hash.slice(0, 7)
+    let url = commitUrl(repoInfo.host, repoInfo.owner, repoInfo.repo, commit.hash)
+    line = line + ` ([${shortHash}](${url}))`
+  } else if (commit.hash !== null) {
+    let shortHash = commit.hash.slice(0, 7)
+    line = line + ` (${shortHash})`
+  }
+
+  // Add issue references
+  if (commit.references.length > 0) {
+    let refs = []
+    let ri = 0
+    while (ri < commit.references.length) {
+      let ref = commit.references[ri]
+      if (repoInfo !== null) {
+        let iUrl = `https://${repoInfo.host}/${repoInfo.owner}/${repoInfo.repo}/issues/${ref.issue}`
+        refs.push(`[#${ref.issue}](${iUrl})`)
+      } else {
+        refs.push(`#${ref.issue}`)
+      }
+      ri = ri + 1
+    }
+    line = line + `, ${refs.join(", ")}`
+  }
+
+  return line
+}
+
+// generateNotes lifecycle hook
+export fn generateNotes(pluginConfig, context) {
+  let logger = context.logger
+  let commits = context.commits
+  let nextRelease = context.nextRelease
+  let lastRelease = context.lastRelease
+
+  if (commits === null || commits.length === 0) {
+    return ""
+  }
+
+  // Parse repo info from remote URL
+  let repoInfo = null
+  if (context.options !== null && context.options.repositoryUrl !== null) {
+    repoInfo = parseGitUrl(context.options.repositoryUrl)
+  }
+
+  let includeAll = pluginConfig.preset === "all"
+
+  // Group commits by type
+  let groups = {}
+  let breakingChanges = []
+
+  let i = 0
+  while (i < commits.length) {
+    let commit = commits[i]
+
+    if (commit.type !== null && isVisibleType(commit.type, includeAll)) {
+      if (groups[commit.type] === null) {
+        groups[commit.type] = []
+      }
+      groups[commit.type].push(commit)
+    }
+
+    // Collect breaking changes regardless of type
+    if (commit.breaking) {
+      let desc = commit.breakingDescription
+      if (desc === null) desc = commit.subject
+      breakingChanges.push({
+        scope: commit.scope,
+        description: desc
+      })
+    }
+
+    i = i + 1
+  }
+
+  // Build markdown
+  let lines = []
+
+  // Header with version and date
+  let version = nextRelease.version
+  let versionTag = nextRelease.gitTag
+
+  if (repoInfo !== null && lastRelease !== null && lastRelease.gitTag !== null) {
+    let cUrl = compareUrl(repoInfo.host, repoInfo.owner, repoInfo.repo, lastRelease.gitTag, versionTag)
+    lines.push(`## [${version}](${cUrl}) (${formatDate(null)})`)
+  } else {
+    lines.push(`## ${version} (${formatDate(null)})`)
+  }
+
+  lines.push("")
+
+  // Render each type group
+  let gi = 0
+  while (gi < TYPE_GROUPS.length) {
+    let groupDef = TYPE_GROUPS[gi]
+    let groupCommits = groups[groupDef.type]
+
+    if (groupCommits !== null && groupCommits.length > 0) {
+      lines.push(`### ${groupDef.title}`)
+      lines.push("")
+
+      let ci = 0
+      while (ci < groupCommits.length) {
+        lines.push(formatCommitLine(groupCommits[ci], repoInfo))
+        ci = ci + 1
+      }
+
+      lines.push("")
+    }
+
+    gi = gi + 1
+  }
+
+  // Breaking changes section
+  if (breakingChanges.length > 0) {
+    lines.push("### BREAKING CHANGES")
+    lines.push("")
+
+    let bi = 0
+    while (bi < breakingChanges.length) {
+      let bc = breakingChanges[bi]
+      if (bc.scope !== null) {
+        lines.push(`* **${bc.scope}:** ${bc.description}`)
+      } else {
+        lines.push(`* ${bc.description}`)
+      }
+      bi = bi + 1
+    }
+
+    lines.push("")
+  }
+
+  let result = lines.join("\n").trim()
+  logger.info(`Generated release notes (${result.length} chars)`)
+  return result
+}

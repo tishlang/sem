@@ -1,0 +1,97 @@
+// sem/test/release-notes.test.tish
+// Unit tests for the release notes generator plugin
+
+import { generateNotes } from "../src/plugins/release-notes-generator/index.tish"
+import { parseCommit } from "../src/commit-parser.tish"
+import { createLogger } from "../src/logger.tish"
+
+let passed = 0
+let failed = 0
+
+fn assert(name, condition) {
+  if (condition) {
+    passed = passed + 1
+  } else {
+    failed = failed + 1
+    console.log(`  ✖ ${name}`)
+  }
+}
+
+fn makeContext(commitMsgs) {
+  let commits = commitMsgs.map(fn(msg) { return parseCommit(msg, "abc1234567890") })
+  return {
+    commits: commits,
+    nextRelease: {
+      version: "1.2.0",
+      gitTag: "v1.2.0",
+      channel: null,
+      notes: ""
+    },
+    lastRelease: {
+      version: "1.1.0",
+      gitTag: "v1.1.0"
+    },
+    options: {
+      repositoryUrl: "https://github.com/test/repo.git"
+    },
+    logger: createLogger("test")
+  }
+}
+
+console.log("release-notes.test.tish tests")
+console.log("==============================\n")
+
+// --- Basic feature ---
+console.log("basic output:")
+let ctx1 = makeContext(["feat(api): add new endpoint"])
+let notes1 = generateNotes({}, ctx1)
+assert("contains version header", notes1.includes("## "))
+assert("contains Features section", notes1.includes("### Features"))
+assert("contains commit subject", notes1.includes("add new endpoint"))
+assert("contains scope", notes1.includes("**api:**"))
+assert("contains commit hash link", notes1.includes("abc1234"))
+
+// --- Multiple types ---
+console.log("\nmultiple types:")
+let ctx2 = makeContext([
+  "feat: new feature",
+  "fix: bug fix",
+  "perf: speed up"
+])
+let notes2 = generateNotes({}, ctx2)
+assert("has Features", notes2.includes("### Features"))
+assert("has Bug Fixes", notes2.includes("### Bug Fixes"))
+assert("has Performance", notes2.includes("### Performance Improvements"))
+
+// --- Breaking changes ---
+console.log("\nbreaking changes:")
+let ctx3 = makeContext(["feat!: breaking change"])
+let notes3 = generateNotes({}, ctx3)
+assert("has BREAKING CHANGES section", notes3.includes("### BREAKING CHANGES"))
+
+// --- Non-visible types excluded ---
+console.log("\nfiltering:")
+let ctx4 = makeContext(["chore: update deps", "docs: readme"])
+let notes4 = generateNotes({}, ctx4)
+assert("chore not in default output", !notes4.includes("### Chores"))
+assert("docs not in default output", !notes4.includes("### Documentation"))
+
+// --- Empty commits ---
+console.log("\nedge cases:")
+let ctx5 = makeContext([])
+let notes5 = generateNotes({}, ctx5)
+assert("empty commits → empty string", notes5 === "")
+
+// --- Contains repo URLs ---
+console.log("\nrepo URLs:")
+let ctx6 = makeContext(["feat: feature with url"])
+let notes6 = generateNotes({}, ctx6)
+assert("contains github.com link", notes6.includes("github.com"))
+assert("contains compare URL", notes6.includes("compare"))
+
+// Summary
+console.log(`\n${"=".repeat(40)}`)
+console.log(`Results: ${passed} passed, ${failed} failed`)
+if (failed > 0) {
+  process.exit(1)
+}

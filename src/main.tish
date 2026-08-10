@@ -1,0 +1,159 @@
+// sem/src/main.tish
+// CLI entry point for sem — automated semantic release pipeline
+
+import { loadConfig } from "./config.tish"
+import { release } from "./orchestrator.tish"
+import { enableDebug, log } from "./logger.tish"
+
+const VERSION = "1.0.0"
+const HELP_TEXT = `
+sem — automated semantic versioning and release pipeline
+
+Usage:
+  tish run --fs --process --regex --http src/main.tish [options]
+
+Options:
+  --dry-run       Run without making any changes
+  --no-ci         Skip CI environment check
+  --debug         Enable debug logging
+  --branch <name> Override the release branch
+  --help          Show this help message
+  --version       Show version
+
+Configuration:
+  sem looks for config in (priority order):
+    1. .semrc.json
+    2. .releaserc.json
+    3. package.json "sem" or "release" key
+    4. Built-in defaults
+
+  Default plugins:
+    @sem/commit-analyzer
+    @sem/release-notes-generator
+    @sem/npm
+    @sem/github
+
+  Additional plugins:
+    @sem/changelog    — Creates/updates CHANGELOG.md
+    @sem/git          — Commits release artifacts
+
+Examples:
+  # Standard release
+  tish run --fs --process --regex --http src/main.tish
+
+  # Dry run
+  tish run --fs --process --regex --http src/main.tish --dry-run
+
+  # With debug output
+  tish run --fs --process --regex --http src/main.tish --debug
+
+  # Force run outside CI
+  tish run --fs --process --regex --http src/main.tish --no-ci
+`
+
+// Parse CLI arguments
+fn parseArgs(argv) {
+  let args = {
+    dryRun: false,
+    noCi: false,
+    debug: false,
+    branch: null,
+    help: false,
+    version: false
+  }
+
+  let i = 0
+  while (i < argv.length) {
+    let arg = argv[i]
+
+    if (arg === "--dry-run" || arg === "-d") {
+      args.dryRun = true
+    } else if (arg === "--no-ci") {
+      args.noCi = true
+    } else if (arg === "--debug") {
+      args.debug = true
+    } else if (arg === "--branch" || arg === "-b") {
+      if (i + 1 < argv.length) {
+        i = i + 1
+        args.branch = argv[i]
+      }
+    } else if (arg === "--help" || arg === "-h") {
+      args.help = true
+    } else if (arg === "--version" || arg === "-v") {
+      args.version = true
+    }
+
+    i = i + 1
+  }
+
+  return args
+}
+
+// Main entry point
+fn main() {
+  let argv = process.argv.slice(2) // Skip binary and script path
+  let args = parseArgs(argv)
+
+  if (args.help) {
+    console.log(HELP_TEXT)
+    process.exit(0)
+    return
+  }
+
+  if (args.version) {
+    console.log(`sem v${VERSION}`)
+    process.exit(0)
+    return
+  }
+
+  if (args.debug) {
+    enableDebug()
+  }
+
+  // Load config
+  let cwd = process.cwd()
+  let cliOverrides = {}
+
+  if (args.dryRun) cliOverrides.dryRun = true
+  if (args.noCi) cliOverrides.noCi = true
+  if (args.debug) cliOverrides.debug = true
+
+  let config = loadConfig(cwd, cliOverrides)
+
+  // Override branch if specified
+  if (args.branch !== null) {
+    // Ensure the specified branch is in the branches list
+    let found = false
+    let bi = 0
+    while (bi < config.branches.length) {
+      let b = config.branches[bi]
+      let bName = typeof b === "string" ? b : b.name
+      if (bName === args.branch) {
+        found = true
+        break
+      }
+      bi = bi + 1
+    }
+    if (!found) {
+      // Add it as a simple branch
+      config.branches.push(args.branch)
+    }
+  }
+
+  // Run the release pipeline
+  let result = release(config)
+
+  if (!result.success) {
+    log.error(`Release failed: ${result.error}`)
+    process.exit(1)
+  } else if (result.released) {
+    log.success(`Released v${result.version}`)
+    process.exit(0)
+  } else {
+    log.info("No release needed")
+    process.exit(0)
+  }
+}
+
+// Execute
+main()

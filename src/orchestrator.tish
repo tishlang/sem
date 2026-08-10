@@ -1,0 +1,332 @@
+// sem/src/orchestrator.tish
+// Core release pipeline — executes lifecycle steps in order
+
+import { createLogger, log as globalLog } from "./logger.tish"
+import { loadPlugins, runPlugins, runAnalyzeCommits, runGenerateNotes, LIFECYCLE_STEPS } from "./plugin-loader.tish"
+import * as gitOps from "./git.tish"
+import * as semver from "./semver.tish"
+import { parseCommit } from "./commit-parser.tish"
+import { parseGitUrl } from "./utils/url.tish"
+
+const log = createLogger("core")
+
+fn buildTagName(tagFormat, version) {
+  // Replace ${version} in tag format
+  return tagFormat.replace("${version}", version)
+}
+
+fn parseTagVersion(tag, tagFormat) {
+  // Extract version from tag using the format
+  // e.g., tagFormat = "v${version}", tag = "v1.2.3" → "1.2.3"
+  let prefix = tagFormat.split("${version}")[0]
+  let suffix = tagFormat.split("${version}")[1]
+
+  let version = tag
+  if (prefix !== "") {
+    if (version.startsWith(prefix)) {
+      version = version.slice(prefix.length)
+    }
+  }
+  if (suffix !== null && suffix !== "") {
+    if (version.endsWith(suffix)) {
+      version = version.slice(0, version.length - suffix.length)
+    }
+  }
+
+  return version
+}
+
+fn determineBranch(config, currentBranch) {
+  let branches = config.branches
+  if (branches === null || !Array.isArray(branches)) {
+    branches = ["main", "master"]
+  }
+
+  let i = 0
+  while (i < branches.length) {
+    let branchConfig = branches[i]
+    let branchName = null
+    let channel = null
+    let prerelease = null
+    let range = null
+
+    if (typeof branchConfig === "string") {
+      branchName = branchConfig
+    } else {
+      branchName = branchConfig.name
+      channel = branchConfig.channel !== null ? branchConfig.channel : null
+      prerelease = branchConfig.prerelease !== null ? branchConfig.prerelease : null
+      range = branchConfig.range !== null ? branchConfig.range : null
+    }
+
+    if (branchName === currentBranch) {
+      return {
+        name: currentBranch,
+        channel: channel,
+        prerelease: prerelease,
+        range: range,
+        main: i === 0 // First branch is the main release branch
+      }
+    }
+    i = i + 1
+  }
+
+  return null
+}
+
+export fn release(config) {
+  let startTime = Date.now()
+  let cwd = config.cwd !== null ? config.cwd : process.cwd()
+  let env = process.env
+
+  log.blank()
+  log.highlight("sem", "automated release pipeline")
+  log.blank()
+
+  // Verify we're in a git repo
+  if (!gitOps.isGitRepo(cwd)) {
+    log.error("Not a git repository")
+    return { success: false, error: "Not a git repository" }
+  }
+
+  // Get current branch
+  let currentBranch = gitOps.getCurrentBranch(cwd)
+  if (currentBranch === null) {
+    log.error("Could not determine current branch")
+    return { success: false, error: "Could not determine current branch" }
+  }
+  log.info(`Branch: ${currentBranch}`)
+
+  // Check if branch is configured for releases
+  let branch = determineBranch(config, currentBranch)
+  if (branch === null) {
+    log.error(`Branch '${currentBranch}' is not configured for releases`)
+    log.info(`Configured branches: ${JSON.stringify(config.branches)}`)
+    return { success: false, error: `Branch '${currentBranch}' is not configured for releases` }
+  }
+
+  // CI check
+  if (config.ci && env.CI === null && env.GITHUB_ACTIONS === null && env.TRAVIS === null && env.CIRCLECI === null) {
+    if (!config.noCi) {
+      log.warn("Not running in a CI environment. Use --no-ci to force.")
+      // Don't fail — just warn
+    }
+  }
+
+  // Get repository URL
+  let repositoryUrl = gitOps.getRemoteUrl(cwd)
+  log.info(`Repository: ${repositoryUrl}`)
+
+  // Build context
+  let context = {
+    cwd: cwd,
+    env: env,
+    options: {
+      ...config,
+      repositoryUrl: repositoryUrl
+    },
+    branch: branch,
+    lastRelease: null,
+    nextRelease: null,
+    commits: [],
+    releases: [],
+    errors: []
+  }
+
+  // Load plugins
+  let plugins = null
+  try {
+    plugins = loadPlugins(config.plugins)
+    log.info(`Loaded ${plugins.plugins.length} plugins`)
+  } catch (e) {
+    log.error(`Failed to load plugins: ${e}`)
+    return { success: false, error: `Plugin loading failed: ${e}` }
+  }
+
+  // Determine tag format
+  let tagFormat = config.tagFormat !== null ? config.tagFormat : ("v" + "$" + "{version}")
+
+  // Find last release
+  let lastTag = gitOps.getLastTag(tagFormat, cwd)
+  if (lastTag !== null) {
+    let lastVersion = parseTagVersion(lastTag, tagFormat)
+    let lastSha = gitOps.getSha(lastTag, cwd)
+    context.lastRelease = {
+      version: lastVersion,
+      gitTag: lastTag,
+      gitHead: lastSha,
+      channel: null
+    }
+    log.info(`Last release: ${lastTag} (${lastVersion})`)
+  } else {
+    log.info("No previous release found — this will be the first release")
+    context.lastRelease = {
+      version: "0.0.0",
+      gitTag: null,
+      gitHead: null,
+      channel: null
+    }
+  }
+
+  // Get commits since last release
+  let rawCommits = gitOps.getCommitsSince(
+    context.lastRelease.gitTag,
+    cwd
+  )
+
+  // Parse commits
+  let parsedCommits = []
+  let ci = 0
+  while (ci < rawCommits.length) {
+    let parsed = parseCommit(rawCommits[ci].message, rawCommits[ci].hash)
+    if (parsed !== null) {
+      parsedCommits.push(parsed)
+    }
+    ci = ci + 1
+  }
+  context.commits = parsedCommits
+  log.info(`Found ${parsedCommits.length} commits since last release`)
+
+  if (parsedCommits.length === 0) {
+    log.info("No commits found — nothing to release")
+    return { success: true, released: false }
+  }
+
+  // === LIFECYCLE EXECUTION ===
+
+  try {
+    // 1. verifyConditions
+    log.blank()
+    runPlugins("verifyConditions", plugins, context)
+
+    // 2. analyzeCommits
+    log.blank()
+    let releaseType = runAnalyzeCommits(plugins, context)
+
+    if (releaseType === null) {
+      log.info("No release type determined — no release needed")
+      return { success: true, released: false }
+    }
+
+    log.highlight("Release type", releaseType)
+
+    // Calculate next version
+    let nextVersion = semver.increment(context.lastRelease.version, releaseType, branch.prerelease)
+    if (nextVersion === null) {
+      log.error(`Failed to calculate next version from ${context.lastRelease.version} with bump ${releaseType}`)
+      return { success: false, error: "Version calculation failed" }
+    }
+
+    // Handle prerelease
+    if (branch.prerelease !== null) {
+      let preId = typeof branch.prerelease === "string" ? branch.prerelease : branch.name
+      if (releaseType === "major") {
+        nextVersion = semver.increment(context.lastRelease.version, "premajor", preId)
+      } else if (releaseType === "minor") {
+        nextVersion = semver.increment(context.lastRelease.version, "preminor", preId)
+      } else {
+        nextVersion = semver.increment(context.lastRelease.version, "prepatch", preId)
+      }
+    }
+
+    let nextTag = buildTagName(tagFormat, nextVersion)
+    let channel = branch.channel !== null ? branch.channel : (branch.main ? null : branch.name)
+
+    context.nextRelease = {
+      type: releaseType,
+      version: nextVersion,
+      gitTag: nextTag,
+      gitHead: gitOps.getHead(cwd),
+      channel: channel,
+      notes: ""
+    }
+
+    log.highlight("Next version", nextVersion)
+    log.highlight("Next tag", nextTag)
+    if (channel !== null) log.highlight("Channel", channel)
+
+    // 3. verifyRelease
+    log.blank()
+    runPlugins("verifyRelease", plugins, context)
+
+    // 4. generateNotes
+    log.blank()
+    let notes = runGenerateNotes(plugins, context)
+    context.nextRelease.notes = notes
+
+    // 5. prepare
+    log.blank()
+    runPlugins("prepare", plugins, context)
+
+    // Create git tag (core responsibility, not plugin)
+    if (!config.dryRun) {
+      gitOps.tag(nextTag, null, cwd)
+      gitOps.push("origin", null, true, cwd) // Push tags
+      log.success(`Created and pushed tag ${nextTag}`)
+    } else {
+      log.info(`[dry-run] Would create tag ${nextTag}`)
+    }
+
+    // 6. publish
+    log.blank()
+    let publishResults = runPlugins("publish", plugins, context)
+    let pi = 0
+    while (pi < publishResults.length) {
+      if (publishResults[pi] !== null) {
+        context.releases.push(publishResults[pi])
+      }
+      pi = pi + 1
+    }
+
+    // 7. addChannel
+    if (channel !== null) {
+      log.blank()
+      runPlugins("addChannel", plugins, context)
+    }
+
+    // 8. success
+    log.blank()
+    runPlugins("success", plugins, context)
+
+    // Summary
+    let elapsed = Date.now() - startTime
+    log.blank()
+    log.success(`Published release ${nextVersion} on ${currentBranch}`)
+    if (context.releases.length > 0) {
+      let ri = 0
+      while (ri < context.releases.length) {
+        let rel = context.releases[ri]
+        if (rel !== null && rel.url !== null) {
+          log.info(`  ${rel.name}: ${rel.url}`)
+        }
+        ri = ri + 1
+      }
+    }
+    log.info(`Completed in ${elapsed}ms`)
+    log.blank()
+
+    return {
+      success: true,
+      released: true,
+      version: nextVersion,
+      tag: nextTag,
+      channel: channel,
+      releases: context.releases
+    }
+
+  } catch (err) {
+    // Fail lifecycle
+    log.blank()
+    log.error(`Release failed: ${err}`)
+
+    context.errors.push(String(err))
+
+    try {
+      runPlugins("fail", plugins, context)
+    } catch (failErr) {
+      log.error(`Fail handler also errored: ${failErr}`)
+    }
+
+    return { success: false, error: String(err) }
+  }
+}

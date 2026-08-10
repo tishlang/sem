@@ -1,0 +1,97 @@
+// sem/test/commit-parser.test.tish
+// Unit tests for the commit parser
+
+import { parseCommit } from "../src/commit-parser.tish"
+
+let passed = 0
+let failed = 0
+
+fn assert(name, actual, expected) {
+  let actualStr = JSON.stringify(actual)
+  let expectedStr = JSON.stringify(expected)
+  if (actualStr === expectedStr) {
+    passed = passed + 1
+  } else {
+    failed = failed + 1
+    console.log(`  ✖ ${name}`)
+    console.log(`    expected: ${expectedStr}`)
+    console.log(`    actual:   ${actualStr}`)
+  }
+}
+
+console.log("commit-parser.tish tests")
+console.log("========================\n")
+
+// --- Basic conventional commit ---
+console.log("basic parsing:")
+let c1 = parseCommit("feat(api): add new endpoint", "abc1234")
+assert("type", c1.type, "feat")
+assert("scope", c1.scope, "api")
+assert("subject", c1.subject, "add new endpoint")
+assert("hash", c1.hash, "abc1234")
+assert("breaking", c1.breaking, false)
+
+// --- Fix without scope ---
+let c2 = parseCommit("fix: resolve null pointer", "def5678")
+assert("fix type", c2.type, "fix")
+assert("fix no scope", c2.scope, null)
+assert("fix subject", c2.subject, "resolve null pointer")
+
+// --- Breaking change via ! ---
+console.log("\nbreaking changes:")
+let c3 = parseCommit("feat(api)!: change return type", "111")
+assert("breaking via !", c3.breaking, true)
+assert("breaking type", c3.type, "feat")
+
+// --- Breaking change via footer ---
+let c4 = parseCommit("feat: new feature\n\nSome body text\n\nBREAKING CHANGE: old API removed", "222")
+assert("breaking via footer", c4.breaking, true)
+assert("breaking description", c4.breakingDescription, "old API removed")
+
+// --- Body and footer separation ---
+console.log("\nbody/footer:")
+let c5 = parseCommit("fix(core): fix bug\n\nThis is the body of the commit.\nIt has multiple lines.\n\nCloses #42", "333")
+assert("has body", c5.body !== null, true)
+assert("body content", c5.body.includes("body of the commit"), true)
+
+// --- References ---
+console.log("\nreferences:")
+let c6 = parseCommit("fix: resolve issue\n\nCloses #42\nFixes #99", "444")
+assert("reference count", c6.references.length, 2)
+assert("first ref issue", c6.references[0].issue, "42")
+assert("second ref issue", c6.references[1].issue, "99")
+
+// --- Non-conventional commit ---
+console.log("\nnon-conventional:")
+let c7 = parseCommit("just a regular commit message", "555")
+assert("no type", c7.type, null)
+assert("header preserved", c7.header, "just a regular commit message")
+
+// --- Null/empty ---
+console.log("\nedge cases:")
+assert("null returns null", parseCommit(null, null), null)
+assert("empty returns null", parseCommit("", null), null)
+assert("whitespace returns null", parseCommit("   ", null), null)
+
+// --- Various types ---
+console.log("\nvarious types:")
+let types = ["feat", "fix", "chore", "docs", "style", "refactor", "perf", "test", "build", "ci", "revert"]
+let ti = 0
+while (ti < types.length) {
+  let t = types[ti]
+  let c = parseCommit(`${t}: test message`, null)
+  assert(`type ${t}`, c.type, t)
+  ti = ti + 1
+}
+
+// --- Merge commit ---
+console.log("\nmerge commit:")
+let c8 = parseCommit("Merge pull request #123 from user/branch", "666")
+assert("merge detected", c8.merge !== null, true)
+
+// Summary
+console.log(`\n${"=".repeat(40)}`)
+console.log(`Results: ${passed} passed, ${failed} failed`)
+if (failed > 0) {
+  process.exit(1)
+}

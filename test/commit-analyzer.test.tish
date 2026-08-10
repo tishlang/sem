@@ -1,0 +1,96 @@
+// sem/test/commit-analyzer.test.tish
+// Unit tests for the commit analyzer plugin
+
+import { analyzeCommits } from "../src/plugins/commit-analyzer/index.tish"
+import { parseCommit } from "../src/commit-parser.tish"
+import { createLogger } from "../src/logger.tish"
+
+let passed = 0
+let failed = 0
+
+fn assert(name, actual, expected) {
+  if (actual === expected) {
+    passed = passed + 1
+  } else {
+    failed = failed + 1
+    console.log(`  ✖ ${name}`)
+    console.log(`    expected: ${JSON.stringify(expected)}`)
+    console.log(`    actual:   ${JSON.stringify(actual)}`)
+  }
+}
+
+fn makeContext(commitMsgs) {
+  let commits = commitMsgs.map(fn(msg) { return parseCommit(msg, "abc123") })
+  return {
+    commits: commits,
+    logger: createLogger("test")
+  }
+}
+
+console.log("commit-analyzer.test.tish tests")
+console.log("================================\n")
+
+// --- Feature → minor ---
+console.log("basic release types:")
+let r1 = analyzeCommits({}, makeContext(["feat: new feature"]))
+assert("feat → minor", r1, "minor")
+
+// --- Fix → patch ---
+let r2 = analyzeCommits({}, makeContext(["fix: bug fix"]))
+assert("fix → patch", r2, "patch")
+
+// --- Performance → patch ---
+let r3 = analyzeCommits({}, makeContext(["perf: optimize query"]))
+assert("perf → patch", r3, "patch")
+
+// --- Breaking change → major ---
+console.log("\nbreaking changes:")
+let r4 = analyzeCommits({}, makeContext(["feat!: breaking feature"]))
+assert("feat! → major", r4, "major")
+
+let r5 = analyzeCommits({}, makeContext(["fix: thing\n\nBREAKING CHANGE: removed old API"]))
+assert("BREAKING CHANGE footer → major", r5, "major")
+
+// --- Highest bump wins ---
+console.log("\nhighest bump wins:")
+let r6 = analyzeCommits({}, makeContext([
+  "fix: small fix",
+  "feat: new feature",
+  "chore: update deps"
+]))
+assert("mix of fix+feat → minor", r6, "minor")
+
+let r7 = analyzeCommits({}, makeContext([
+  "fix: small fix",
+  "feat!: breaking feature"
+]))
+assert("mix of fix+feat! → major", r7, "major")
+
+// --- No release ---
+console.log("\nno release:")
+let r8 = analyzeCommits({}, makeContext(["chore: update deps"]))
+assert("chore → null", r8, null)
+
+let r9 = analyzeCommits({}, makeContext(["docs: update readme", "style: fix spacing"]))
+assert("docs+style → null", r9, null)
+
+let r10 = analyzeCommits({}, makeContext([]))
+assert("empty commits → null", r10, null)
+
+// --- Custom release rules ---
+console.log("\ncustom release rules:")
+let customConfig = {
+  releaseRules: [
+    { type: "docs", scope: "README", release: "patch" },
+    { type: "refactor", release: "patch" }
+  ]
+}
+let r11 = analyzeCommits(customConfig, makeContext(["refactor: restructure code"]))
+assert("custom refactor → patch", r11, "patch")
+
+// Summary
+console.log(`\n${"=".repeat(40)}`)
+console.log(`Results: ${passed} passed, ${failed} failed`)
+if (failed > 0) {
+  process.exit(1)
+}
