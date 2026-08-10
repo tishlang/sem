@@ -1,0 +1,134 @@
+// sem/src/host.tish
+// Dual-runtime host: Node (JS bundle / Actions) via getBuiltinModule,
+// Tish runtime via process.execCapture (+ shell/python file I/O).
+// Avoids `tish:fs` so `tish build --target js` succeeds.
+
+fn tryNodeBuiltin(name) {
+  if (typeof process.getBuiltinModule === "function") {
+    return process.getBuiltinModule(name)
+  }
+  return null
+}
+
+fn toHex(content) {
+  let hex = ""
+  let i = 0
+  while (i < content.length) {
+    let h = content.charCodeAt(i).toString(16)
+    if (h.length < 2) h = "0" + h
+    hex = hex + h
+    i = i + 1
+  }
+  return hex
+}
+
+export fn execCapture(cmd) {
+  if (typeof process.execCapture === "function") {
+    return process.execCapture(cmd)
+  }
+
+  let cp = tryNodeBuiltin("child_process")
+  if (cp === null) {
+    return { code: 1, stdout: "", stderr: "execCapture unavailable: no process.execCapture or child_process" }
+  }
+
+  try {
+    let stdout = cp.execSync(cmd, {
+      encoding: "utf8",
+      shell: true,
+      stdio: ["pipe", "pipe", "pipe"]
+    })
+    return {
+      code: 0,
+      stdout: stdout !== null ? String(stdout) : "",
+      stderr: ""
+    }
+  } catch (e) {
+    let status = 1
+    if (e !== null && e.status !== null) status = e.status
+    let stdout = ""
+    let stderr = ""
+    if (e !== null) {
+      if (e.stdout !== null) stdout = String(e.stdout)
+      if (e.stderr !== null) stderr = String(e.stderr)
+      else if (e.message !== null) stderr = String(e.message)
+    }
+    return { code: status, stdout: stdout, stderr: stderr }
+  }
+}
+
+export fn readFile(path) {
+  let fs = tryNodeBuiltin("fs")
+  if (fs !== null) {
+    try {
+      return fs.readFileSync(path, "utf8")
+    } catch (e) {
+      return null
+    }
+  }
+
+  let r = execCapture("python3 -c \"import sys; print(open(sys.argv[1]).read(), end='')\" " + JSON.stringify(path))
+  if (r.code !== 0) return null
+  return r.stdout
+}
+
+export fn writeFile(path, content) {
+  let fs = tryNodeBuiltin("fs")
+  if (fs !== null) {
+    fs.writeFileSync(path, content, "utf8")
+    return
+  }
+
+  let hex = toHex(content)
+  let r = execCapture(
+    "python3 -c \"import sys; p=sys.argv[1]; h=sys.argv[2]; open(p,'w').write(bytes.fromhex(h).decode())\" " +
+      JSON.stringify(path) +
+      " " +
+      JSON.stringify(hex)
+  )
+  if (r.code !== 0) {
+    throw "writeFile failed for " + path + ": " + (r.stderr !== null ? r.stderr : "unknown error")
+  }
+}
+
+export fn fileExists(path) {
+  let fs = tryNodeBuiltin("fs")
+  if (fs !== null) {
+    try {
+      return fs.existsSync(path)
+    } catch (e) {
+      return false
+    }
+  }
+
+  let r = execCapture("test -e " + JSON.stringify(path) + " && echo yes")
+  return r.code === 0 && r.stdout !== null && r.stdout.trim() === "yes"
+}
+
+export fn appendFile(path, content) {
+  let fs = tryNodeBuiltin("fs")
+  if (fs !== null) {
+    fs.appendFileSync(path, content, "utf8")
+    return
+  }
+
+  if (fileExists(path)) {
+    writeFile(path, readFile(path) + content)
+  } else {
+    writeFile(path, content)
+  }
+}
+
+export fn getPackageVersion(cwd) {
+  let pkgPath = (cwd !== null ? cwd : ".") + "/package.json"
+  if (!fileExists(pkgPath)) return "0.0.0"
+  let content = readFile(pkgPath)
+  if (content === null) return "0.0.0"
+  try {
+    let pkg = JSON.parse(content)
+    if (pkg !== null && pkg.version !== null) return String(pkg.version)
+  } catch (e) {
+    // ignore
+  }
+  return "0.0.0"
+}

@@ -189,7 +189,11 @@ export fn release(config) {
 
   if (parsedCommits.length === 0) {
     log.info("No commits found — nothing to release")
-    return { success: true, released: false }
+    return {
+      success: true,
+      released: false,
+      lastRelease: context.lastRelease
+    }
   }
 
   // === LIFECYCLE EXECUTION ===
@@ -205,7 +209,11 @@ export fn release(config) {
 
     if (releaseType === null) {
       log.info("No release type determined — no release needed")
-      return { success: true, released: false }
+      return {
+        success: true,
+        released: false,
+        lastRelease: context.lastRelease
+      }
     }
 
     log.highlight("Release type", releaseType)
@@ -311,6 +319,9 @@ export fn release(config) {
       version: nextVersion,
       tag: nextTag,
       channel: channel,
+      notes: notes,
+      gitHead: context.nextRelease.gitHead,
+      lastRelease: context.lastRelease,
       releases: context.releases
     }
 

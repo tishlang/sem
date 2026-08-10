@@ -2,13 +2,13 @@
 // Clone of @semantic-release/changelog
 // Creates/updates CHANGELOG.md with release notes
 
-import { readFile, writeFile, fileExists } from "tish:fs"
+import { readFile, writeFile, fileExists } from "../../host.tish"
 
 const DEFAULT_CHANGELOG = "CHANGELOG.md"
 const DEFAULT_TITLE = "# Changelog\n\nAll notable changes to this project will be automatically documented in this file.\n"
 
 // verifyConditions — check we can write to the changelog file
-export fn verifyConditions(pluginConfig, context) {
+export fn changelogVerifyConditions(pluginConfig, context) {
   let logger = context.logger
   let changelogFile = pluginConfig.changelogFile !== null ? pluginConfig.changelogFile : DEFAULT_CHANGELOG
   let cwd = context.cwd
@@ -22,7 +22,7 @@ export fn verifyConditions(pluginConfig, context) {
 }
 
 // prepare — prepend release notes to CHANGELOG.md
-export fn prepare(pluginConfig, context) {
+export fn changelogPrepare(pluginConfig, context) {
   let logger = context.logger
   let changelogFile = pluginConfig.changelogFile !== null ? pluginConfig.changelogFile : DEFAULT_CHANGELOG
   let changelogTitle = pluginConfig.changelogTitle !== null ? pluginConfig.changelogTitle : DEFAULT_TITLE

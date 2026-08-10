@@ -4,7 +4,7 @@
 import { loadConfig } from "../src/config.tish"
 import { release } from "../src/orchestrator.tish"
 import { enableDebug } from "../src/logger.tish"
-import { writeFile } from "tish:fs"
+import { writeFile } from "../src/host.tish"
 
 let passed = 0
 let failed = 0

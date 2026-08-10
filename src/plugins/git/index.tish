@@ -2,9 +2,10 @@
 // Clone of @semantic-release/git
 // Commits release artifacts (CHANGELOG.md, package.json, etc.) back to the repo
 
-import * as gitOps from "../../git.tish"
+import * as gitClient from "../../git.tish"
 import { render } from "../../utils/template.tish"
 import { match as globMatch } from "../../utils/glob.tish"
+import { execCapture } from "../../host.tish"
 
 const DEFAULT_ASSETS = [
   "CHANGELOG.md",
@@ -16,7 +17,7 @@ const DEFAULT_ASSETS = [
 const DEFAULT_MESSAGE = "chore(release): " + "$" + "{nextRelease.version} [skip ci]\n\n" + "$" + "{nextRelease.notes}"
 
 // verifyConditions — verify push access
-export fn verifyConditions(pluginConfig, context) {
+export fn gitVerifyConditions(pluginConfig, context) {
   let logger = context.logger
 
   if (context.options.dryRun) {
@@ -31,7 +32,7 @@ export fn verifyConditions(pluginConfig, context) {
 }
 
 // prepare — stage, commit, and push release artifacts
-export fn prepare(pluginConfig, context) {
+export fn gitPrepare(pluginConfig, context) {
   let logger = context.logger
   let cwd = context.cwd
 
@@ -71,7 +72,7 @@ export fn prepare(pluginConfig, context) {
       filesToStage.push(pattern)
     } else {
       // Glob match
-      let findResult = process.execCapture(`cd "${cwd}" && find . -type f -name "${pattern}" -not -path "./.git/*"`)
+      let findResult = execCapture(`cd "${cwd}" && find . -type f -name "${pattern}" -not -path "./.git/*"`)
       if (findResult.code === 0 && findResult.stdout !== null) {
         let found = findResult.stdout.trim().split("\n")
         let fi = 0
@@ -94,7 +95,7 @@ export fn prepare(pluginConfig, context) {
   }
 
   // Stage and commit
-  let success = gitOps.addAndCommit(filesToStage, message, cwd)
+  let success = gitClient.addAndCommit(filesToStage, message, cwd)
   if (!success) {
     logger.warn("Git commit failed or no changes to commit")
     return null
@@ -102,7 +103,7 @@ export fn prepare(pluginConfig, context) {
 
   // Push
   let branch = context.branch !== null ? context.branch.name : null
-  let pushSuccess = gitOps.push("origin", branch, false, cwd)
+  let pushSuccess = gitClient.push("origin", branch, false, cwd)
   if (!pushSuccess) {
     throw "Failed to push release commit to remote"
   }

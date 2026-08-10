@@ -1,6 +1,8 @@
 // sem/src/utils/glob.tish
 // Minimal glob matching for file patterns (*, **, ?)
 
+import { execCapture } from "../host.tish"
+
 // Convert a glob pattern to a regex
 fn globToRegex(pattern) {
   let result = "^"
@@ -82,13 +84,13 @@ export fn match(pattern, filePath) {
 }
 
 // Find files matching a glob pattern in a directory
-// Uses readDir from Tish fs feature
+// Uses host.execCapture to find files
 export fn glob(pattern, cwd) {
   let results = []
   let basePath = cwd !== null ? cwd : "."
 
-  // Use process.exec to find files (since Tish readDir is flat)
-  let findResult = process.execCapture(`cd "${basePath}" && find . -type f`)
+  // Use execCapture to find files (since Tish readDir is flat)
+  let findResult = execCapture(`cd "${basePath}" && find . -type f`)
   if (findResult.code !== 0) return results
 
   let files = findResult.stdout.split("\n")

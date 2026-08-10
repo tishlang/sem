@@ -1,9 +1,8 @@
 // sem/src/config.tish
-// Config loader — merges defaults, file config, and CLI overrides
+// Config loader — merges defaults, file config, CLI/env overrides
 
 import { createLogger } from "./logger.tish"
-import { readFile } from "tish:fs"
-import { fileExists } from "tish:fs"
+import { readFile, fileExists } from "./host.tish"
 
 const log = createLogger("config")
 
@@ -56,26 +55,59 @@ fn tryReadJson(path) {
   return null
 }
 
+fn parseConfigJson(raw, label) {
+  if (raw === null || raw === "") return null
+  try {
+    return JSON.parse(raw)
+  } catch (e) {
+    log.error(`Invalid JSON in ${label}: ${e}`)
+    throw `Invalid JSON in ${label}`
+  }
+}
+
 export fn loadConfig(cwd, cliOverrides) {
   let config = { ...DEFAULT_CONFIG }
   let configSource = "defaults"
+  let skipFiles = false
+
+  if (cliOverrides !== null && cliOverrides.configJson !== null) {
+    let injected = parseConfigJson(cliOverrides.configJson, "--config-json")
+    if (injected !== null) {
+      config = deepMerge(config, injected)
+      configSource = "--config-json"
+      skipFiles = true
+      log.info("Loaded config from --config-json")
+    }
+  }
+
+  if (!skipFiles && process.env.SEM_CONFIG !== null && process.env.SEM_CONFIG !== "") {
+    let injected = parseConfigJson(process.env.SEM_CONFIG, "SEM_CONFIG")
+    if (injected !== null) {
+      config = deepMerge(config, injected)
+      configSource = "SEM_CONFIG"
+      skipFiles = true
+      log.info("Loaded config from SEM_CONFIG")
+    }
+  }
 
   // Try config files
-  let i = 0
-  while (i < CONFIG_FILES.length) {
-    let filePath = `${cwd}/${CONFIG_FILES[i]}`
-    let fileConfig = tryReadJson(filePath)
-    if (fileConfig !== null) {
-      config = deepMerge(config, fileConfig)
-      configSource = CONFIG_FILES[i]
-      log.info(`Loaded config from ${CONFIG_FILES[i]}`)
-      break
+  if (!skipFiles) {
+    let i = 0
+    while (i < CONFIG_FILES.length) {
+      let filePath = `${cwd}/${CONFIG_FILES[i]}`
+      let fileConfig = tryReadJson(filePath)
+      if (fileConfig !== null) {
+        config = deepMerge(config, fileConfig)
+        configSource = CONFIG_FILES[i]
+        log.info(`Loaded config from ${CONFIG_FILES[i]}`)
+        break
+      }
+      i = i + 1
     }
-    i = i + 1
   }
 
   // Try package.json "sem" or "release" key
-  if (configSource === "defaults") {
+  if (!skipFiles && configSource === "defaults") {
     let pkgPath = `${cwd}/package.json`
     let pkg = tryReadJson(pkgPath)
     if (pkg !== null) {
@@ -95,9 +127,11 @@ export fn loadConfig(cwd, cliOverrides) {
     log.debug("Using default configuration")
   }
 
-  // Apply CLI overrides
+  // Apply CLI overrides (except configJson which was already applied)
   if (cliOverrides !== null) {
-    config = deepMerge(config, cliOverrides)
+    let overrides = { ...cliOverrides }
+    overrides.configJson = null
+    config = deepMerge(config, overrides)
   }
 
   // Set cwd

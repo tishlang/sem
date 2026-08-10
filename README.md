@@ -1,37 +1,95 @@
-# sem
+# @tishlang/sem
 
-**Automated semantic versioning and release pipeline** — a full [semantic-release](https://github.com/semantic-release/semantic-release) clone written in [Tish](https://tishlang.com).
+**Automated semantic versioning and release pipeline** — a [semantic-release](https://github.com/semantic-release/semantic-release)-style tool written in [Tish](https://tishlang.com), with a **dual runtime**:
+
+| Runtime | How |
+|---------|-----|
+| **Tish** | `tish run --feature full src/main.tish` (source via `tish.module`) |
+| **Node** | `npx @tishlang/sem` / `node bin/sem.js` (prebuilt `dist/sem.js`) |
+| **GitHub Actions (semtac)** | `uses: tishlang/sem@v1` — inline config, **no consumer `node_modules`** |
 
 ## Features
 
-- 🔄 **Full lifecycle** — 9-step plugin pipeline: `verifyConditions` → `analyzeCommits` → `verifyRelease` → `generateNotes` → `prepare` → `publish` → `addChannel` → `success` → `fail`
-- 📦 **6 built-in plugins** — commit-analyzer, release-notes-generator, changelog, npm, github, git
-- 📝 **Conventional Commits** — Angular preset with customizable release rules
-- 🏷️ **Semver** — full semver 2.0 parsing, comparison, and incrementing
-- 🌿 **Multi-branch** — release branches, pre-release channels, maintenance branches
-- 🔌 **Plugin system** — same plugin API as semantic-release
-- ⚡ **Zero dependencies** — everything implemented in pure Tish
+- Full 9-step plugin pipeline: `verifyConditions` → `analyzeCommits` → … → `fail`
+- Built-in plugins: `@sem/commit-analyzer`, `@sem/release-notes-generator`, `@sem/changelog`, `@sem/npm`, `@sem/github`, `@sem/git`
+- Conventional Commits + semver
+- Config via file, `package.json`, env `SEM_CONFIG`, or `--config-json` / Action `config` input
 
-## Quick Start
+## Install
 
 ```bash
-# Run a release
-tish run --fs --process --regex --http src/main.tish
-
-# Dry run
-tish run --fs --process --regex --http src/main.tish --dry-run
-
-# With debug output
-tish run --fs --process --regex --http src/main.tish --debug
+npm install -D @tishlang/sem
 ```
+
+Requires Node ≥ 22 for the JS CLI. For Tish-native runs, install a `tish` CLI (`@tishlang/tish` or cargo build).
+
+## Quick start
+
+```bash
+# Node
+npx sem --dry-run --no-ci
+
+# Tish
+tish run --feature full src/main.tish --dry-run --no-ci
+
+# Inline config (skip .semrc)
+npx sem --dry-run --no-ci --config-json '{"branches":["main"],"plugins":["@sem/commit-analyzer","@sem/release-notes-generator"]}'
+```
+
+## semtac (GitHub Action)
+
+Zero consumer deps — the action ships the JS bundle on the release tag.
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+
+- uses: tishlang/sem@v1
+  id: sem
+  with:
+    dry_run: true
+    working_directory: .
+    config: |
+      {
+        "branches": ["main"],
+        "plugins": [
+          "@sem/commit-analyzer",
+          "@sem/release-notes-generator"
+        ]
+      }
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+- if: steps.sem.outputs.new_release_published == 'true'
+  run: echo "Next version ${{ steps.sem.outputs.new_release_version }}"
+```
+
+### Action inputs
+
+| Input | Description |
+|-------|-------------|
+| `config` | Full sem JSON config (skips file / package.json config when set) |
+| `dry_run` | Preview only |
+| `ci` | Default `true`; set `false` for `--no-ci` |
+| `working_directory` | Package cwd (monorepos) |
+| `branches` | Optional JSON array override |
+| `tag_format` | Optional tag format override |
+| `debug` | Verbose logging |
+
+### Action outputs
+
+Compatible with `cycjimmy/semantic-release-action`: `new_release_published`, `new_release_version`, major/minor/patch, `new_release_notes`, `new_release_git_tag` / `git_head`, `last_release_*`.
+
+No bump → `new_release_published=false`, exit 0.
 
 ## Configuration
 
-sem looks for config in this order:
+Priority when `config` / `--config-json` / `SEM_CONFIG` is **not** set:
 
-1. `.semrc.json` in the project root
+1. `.semrc.json`
 2. `.releaserc.json`
-3. `"sem"` or `"release"` key in `package.json`
+3. `package.json` `"sem"` or `"release"`
 4. Built-in defaults
 
 ### Example `.semrc.json`
@@ -53,126 +111,42 @@ sem looks for config in this order:
 }
 ```
 
-## Plugins
-
-### `@sem/commit-analyzer`
-
-Analyzes commit messages to determine the release type.
-
-| Commit | Release |
-|:---|:---|
-| `feat: ...` | minor |
-| `fix: ...` | patch |
-| `perf: ...` | patch |
-| `feat!: ...` or `BREAKING CHANGE:` footer | major |
-
-Supports custom `releaseRules`:
-
-```json
-["@sem/commit-analyzer", {
-  "releaseRules": [
-    { "type": "refactor", "release": "patch" },
-    { "type": "docs", "scope": "README", "release": "patch" }
-  ]
-}]
-```
-
-### `@sem/release-notes-generator`
-
-Generates markdown release notes grouped by commit type, with links to commits and issues.
-
-### `@sem/changelog`
-
-Creates or updates `CHANGELOG.md` with release notes.
-
-```json
-["@sem/changelog", { "changelogFile": "CHANGELOG.md" }]
-```
-
-### `@sem/npm`
-
-Updates `package.json` version and publishes to npm.
-
-Requires `NPM_TOKEN` environment variable.
-
-```json
-["@sem/npm", { "npmPublish": true, "pkgRoot": "." }]
-```
-
-### `@sem/github`
-
-Creates GitHub Releases and comments on resolved issues.
-
-Requires `GITHUB_TOKEN` or `GH_TOKEN` environment variable.
-
-```json
-["@sem/github", { "successComment": "Released in v${nextRelease.version}" }]
-```
-
-### `@sem/git`
-
-Commits release artifacts (CHANGELOG.md, package.json) back to the repository.
-
-```json
-["@sem/git", {
-  "assets": ["CHANGELOG.md", "package.json"],
-  "message": "chore(release): ${nextRelease.version} [skip ci]"
-}]
-```
-
-## Branch Configuration
-
-```json
-{
-  "branches": [
-    "main",
-    "next",
-    { "name": "beta", "prerelease": true },
-    { "name": "1.x", "range": "1.x" }
-  ]
-}
-```
-
-## CLI Options
+## CLI options
 
 | Flag | Description |
-|:---|:---|
-| `--dry-run` | Run without making changes |
-| `--no-ci` | Skip CI environment check |
-| `--debug` | Enable verbose logging |
-| `--branch <name>` | Override release branch |
-| `--help` | Show help |
-| `--version` | Show version |
+|------|-------------|
+| `--dry-run` | No publish / tag |
+| `--no-ci` | Allow non-CI |
+| `--debug` | Verbose |
+| `--branch <name>` | Branch override |
+| `--cwd <path>` | Working directory |
+| `--config-json <json>` | Inline config |
+| `--github-output` | Write Action outputs to `$GITHUB_OUTPUT` |
+| `--help` / `--version` | Help / version from `package.json` |
 
-## Running Tests
-
-```bash
-# Unit tests
-tish run --fs --process --regex test/semver.test.tish
-tish run --fs --process --regex test/commit-parser.test.tish
-tish run --fs --process --regex test/commit-analyzer.test.tish
-tish run --fs --process --regex test/release-notes.test.tish
-
-# Integration test
-tish run --fs --process --regex --http test/integration.test.tish
-```
-
-## Architecture
+## Dual-runtime layout
 
 ```
 sem/
-├── src/
-│   ├── main.tish              — CLI entry point
-│   ├── config.tish            — Config loader
-│   ├── orchestrator.tish      — Release pipeline
-│   ├── plugin-loader.tish     — Plugin system
-│   ├── logger.tish            — ANSI logging
-│   ├── git.tish               — Git operations
-│   ├── semver.tish            — Semver 2.0
-│   ├── commit-parser.tish     — Conventional Commits parser
-│   ├── plugins/               — 6 built-in plugins
-│   └── utils/                 — Template, glob, URL helpers
-└── test/                      — Unit & integration tests
+├── src/                 # Tish source (also published)
+├── dist/sem.js          # Node / Action bundle (built via tish build --target js)
+├── bin/sem.js           # Node CLI wrapper
+├── action.yml           # semtac
+├── action/main.js
+└── docs/TISH_SEMTAC_MIGRATION.md
+```
+
+```bash
+npm run build    # tish build src/index.tish -o dist/sem.js --target js
+```
+
+## Development
+
+```bash
+npm test                 # unit tests (tish)
+npm run test:integration
+npm run test:node        # build + Node --help
+npm run test:all
 ```
 
 ## License

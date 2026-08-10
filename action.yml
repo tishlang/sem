@@ -1,0 +1,66 @@
+name: semtac
+description: Run @tishlang/sem (semantic release) with inline config — no consumer node_modules
+author: tishlang
+branding:
+  icon: package
+  color: green
+
+inputs:
+  config:
+    description: Full sem config as JSON (skips .semrc / package.json release config when set)
+    required: false
+    default: ""
+  dry_run:
+    description: Run without publishing or tagging
+    required: false
+    default: "false"
+  ci:
+    description: Treat as CI (default true). Set false to skip CI checks like --no-ci.
+    required: false
+    default: "true"
+  working_directory:
+    description: Working directory for the release (monorepo package root)
+    required: false
+    default: "."
+  branches:
+    description: JSON array of branches (overrides config.branches when set)
+    required: false
+    default: ""
+  tag_format:
+    description: Tag format string, e.g. v${version}
+    required: false
+    default: ""
+  debug:
+    description: Enable debug logging
+    required: false
+    default: "false"
+
+outputs:
+  new_release_published:
+    description: Whether a new release would be / was published
+  new_release_version:
+    description: Version of the new release
+  new_release_major_version:
+    description: Major version of the new release
+  new_release_minor_version:
+    description: Minor version of the new release
+  new_release_patch_version:
+    description: Patch version of the new release
+  new_release_channel:
+    description: Distribution channel for the new release
+  new_release_notes:
+    description: Release notes for the new release
+  new_release_git_head:
+    description: SHA of the last commit in the new release
+  new_release_git_tag:
+    description: Git tag for the new release
+  last_release_version:
+    description: Version of the previous release
+  last_release_git_head:
+    description: SHA of the previous release
+  last_release_git_tag:
+    description: Git tag of the previous release
+
+runs:
+  using: node20
+  main: action/main.js

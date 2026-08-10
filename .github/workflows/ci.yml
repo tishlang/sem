@@ -1,0 +1,209 @@
+# Run tests and on main push create prerelease with npm package + action bundle.
+# Promote the GitHub release (uncheck prerelease) to publish to npm via npm-release.yml.
+
+name: CI (test, prerelease)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Integration tests
+        run: npm run test:integration
+
+      - name: Build JS bundle
+        run: npm run build
+
+      - name: Node CLI smoke
+        run: npm run test:node
+
+  release:
+    name: Release (prerelease + npm tarball)
+    needs: [test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build JS bundle (required for semtac action)
+        run: npm run build
+
+      - name: Next version via semtac (dry-run)
+        id: sem
+        uses: ./
+        with:
+          dry_run: true
+          config: |
+            {
+              "branches": ["main"],
+              "plugins": [
+                "@sem/commit-analyzer",
+                "@sem/release-notes-generator"
+              ]
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip when no bump
+        id: gate
+        run: |
+          if [ "${{ steps.sem.outputs.new_release_published }}" != "true" ]; then
+            echo "::notice::No version bump — skipping prerelease (#86 soft-skip)."
+            echo "continue=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "continue=true" >> "$GITHUB_OUTPUT"
+          echo "version=${{ steps.sem.outputs.new_release_version }}" >> "$GITHUB_OUTPUT"
+          echo "Next version: ${{ steps.sem.outputs.new_release_version }}"
+
+      - name: Set package version
+        if: steps.gate.outputs.continue == 'true'
+        run: |
+          node -e "
+          const fs = require('fs');
+          const p = require('./package.json');
+          p.version = process.env.VERSION;
+          fs.writeFileSync('./package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+        env:
+          VERSION: ${{ steps.gate.outputs.version }}
+
+      - name: Pack npm tarball
+        if: steps.gate.outputs.continue == 'true'
+        run: |
+          npm pack
+          mv tishlang-sem-*.tgz tishlang-sem-npm-package.tgz
+
+      - name: Commit dist for action tag and push release branch
+        if: steps.gate.outputs.continue == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.gate.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          BRANCH="release/v${VERSION}"
+          git checkout -B "$BRANCH"
+          # Ensure action consumers get the JS bundle on this ref
+          git add -f dist/sem.js package.json
+          git commit -m "chore(release): v${VERSION} [skip ci]" || true
+          git push origin "$BRANCH" --force
+          # Rolling major tag for uses: tishlang/sem@v1
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          git tag -f "v${VERSION}"
+          git tag -f "v${MAJOR}"
+          git push origin "v${VERSION}" --force
+          git push origin "v${MAJOR}" --force
+
+      - name: Write release body
+        if: steps.gate.outputs.continue == 'true'
+        env:
+          NOTES: ${{ steps.sem.outputs.new_release_notes }}
+        run: |
+          if [ -n "$NOTES" ]; then
+            printf '%s\n' "$NOTES" > release-body.md
+          else
+            echo "## Changes" > release-body.md
+            echo "" >> release-body.md
+            echo "- Automated prerelease" >> release-body.md
+          fi
+
+      - name: Create or update GitHub prerelease
+        if: steps.gate.outputs.continue == 'true'
+        id: create_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.gate.outputs.version }}
+        run: |
+          TAG="v${VERSION}"
+          BRANCH="release/v${VERSION}"
+          BODY=$(cat release-body.md)
+          RESP=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/releases" \
+            -d "{\"tag_name\":\"$TAG\",\"target_commitish\":\"$BRANCH\",\"name\":\"$TAG\",\"body\":$(echo "$BODY" | jq -Rs .),\"prerelease\":true}")
+          HTTP_CODE=$(echo "$RESP" | tail -n1)
+          BODY_RESP=$(echo "$RESP" | sed '$d')
+          if [ "$HTTP_CODE" = "201" ]; then
+            RELEASE_ID=$(echo "$BODY_RESP" | jq -r .id)
+            echo "Created prerelease $TAG"
+          elif [ "$HTTP_CODE" = "422" ]; then
+            RELEASE_ID=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" | jq -r .id)
+            if [ "$RELEASE_ID" = "null" ] || [ -z "$RELEASE_ID" ]; then
+              echo "Release creation failed (422) and could not find release by tag"
+              exit 1
+            fi
+            curl -s -X PATCH \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID" \
+              -d "{\"target_commitish\":\"$BRANCH\",\"body\":$(echo "$BODY" | jq -Rs .),\"prerelease\":true}"
+            echo "Updated existing prerelease $TAG"
+          else
+            echo "Unexpected response: $HTTP_CODE"
+            echo "$BODY_RESP"
+            exit 1
+          fi
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Upload npm package to prerelease
+        if: steps.gate.outputs.continue == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_ID="${{ steps.create_release.outputs.release_id }}"
+          REPO="${{ github.repository }}"
+          UPLOAD_URL="https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets"
+          # Replace existing asset if present
+          EXISTING=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/$RELEASE_ID/assets" \
+            | jq -r '.[] | select(.name=="tishlang-sem-npm-package.tgz") | .id')
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            curl -s -X DELETE -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/$REPO/releases/assets/$EXISTING"
+          fi
+          curl -s -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @tishlang-sem-npm-package.tgz \
+            "${UPLOAD_URL}?name=tishlang-sem-npm-package.tgz&label=npm%20package%20(@tishlang/sem)"

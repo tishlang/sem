@@ -51,7 +51,7 @@ fn githubFetch(url, method, token, body) {
 }
 
 // verifyConditions — check GitHub token and API access
-export fn verifyConditions(pluginConfig, context) {
+export fn githubVerifyConditions(pluginConfig, context) {
   let logger = context.logger
   let env = context.env
 
@@ -86,7 +86,7 @@ export fn verifyConditions(pluginConfig, context) {
 }
 
 // publish — create a GitHub Release
-export fn publish(pluginConfig, context) {
+export fn githubPublish(pluginConfig, context) {
   let logger = context.logger
   let env = context.env
   let token = getToken(env)
@@ -145,7 +145,7 @@ export fn publish(pluginConfig, context) {
 }
 
 // success — comment on resolved issues
-export fn success(pluginConfig, context) {
+export fn githubSuccess(pluginConfig, context) {
   let logger = context.logger
   let env = context.env
   let token = getToken(env)
@@ -236,7 +236,7 @@ export fn success(pluginConfig, context) {
 }
 
 // fail — open an issue about the release failure
-export fn fail(pluginConfig, context) {
+export fn githubFail(pluginConfig, context) {
   let logger = context.logger
   let env = context.env
   let token = getToken(env)

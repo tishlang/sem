@@ -1,0 +1,166 @@
+// sem/src/index.tish
+// Library entry — dual-runtime API for Node (dist) and Tish consumers
+
+import { loadConfig } from "./config.tish"
+import { release } from "./orchestrator.tish"
+import { writeGitHubOutputs } from "./github-output.tish"
+import { enableDebug, log } from "./logger.tish"
+import { getPackageVersion } from "./host.tish"
+
+export { loadConfig, release, writeGitHubOutputs }
+
+fn parseArgs(argv) {
+  let args = {
+    dryRun: false,
+    noCi: false,
+    debug: false,
+    branch: null,
+    cwd: null,
+    configJson: null,
+    githubOutput: false,
+    help: false,
+    version: false
+  }
+
+  let i = 0
+  while (i < argv.length) {
+    let arg = argv[i]
+
+    if (arg === "--dry-run" || arg === "-d") {
+      args.dryRun = true
+    } else if (arg === "--no-ci") {
+      args.noCi = true
+    } else if (arg === "--debug") {
+      args.debug = true
+    } else if (arg === "--github-output") {
+      args.githubOutput = true
+    } else if (arg === "--branch" || arg === "-b") {
+      if (i + 1 < argv.length) {
+        i = i + 1
+        args.branch = argv[i]
+      }
+    } else if (arg === "--cwd") {
+      if (i + 1 < argv.length) {
+        i = i + 1
+        args.cwd = argv[i]
+      }
+    } else if (arg === "--config-json") {
+      if (i + 1 < argv.length) {
+        i = i + 1
+        args.configJson = argv[i]
+      }
+    } else if (arg === "--help" || arg === "-h") {
+      args.help = true
+    } else if (arg === "--version" || arg === "-v") {
+      args.version = true
+    }
+
+    i = i + 1
+  }
+
+  return args
+}
+
+const HELP_TEXT = `
+sem — automated semantic versioning and release pipeline
+
+Usage:
+  sem [options]
+  tish run --feature full src/main.tish [options]
+  node bin/sem.js [options]
+
+Options:
+  --dry-run            Run without making any changes
+  --no-ci              Skip CI environment check
+  --debug              Enable debug logging
+  --branch <name>      Override the release branch
+  --cwd <path>         Working directory (monorepo package root)
+  --config-json <json> Inline config JSON (skips file / package.json config)
+  --github-output      Write cycjimmy-compatible keys to $GITHUB_OUTPUT
+  --help               Show this help message
+  --version            Show version
+
+Environment:
+  SEM_CONFIG           Inline config JSON (same as --config-json)
+  GITHUB_OUTPUT        Path written when --github-output or Action mode
+
+Configuration (when --config-json / SEM_CONFIG not set):
+  1. .semrc.json
+  2. .releaserc.json
+  3. package.json "sem" or "release" key
+  4. Built-in defaults
+`
+
+export fn runCli(argv) {
+  let args = parseArgs(argv !== null ? argv : process.argv.slice(2))
+
+  if (args.help) {
+    console.log(HELP_TEXT)
+    process.exit(0)
+    return { success: true, released: false }
+  }
+
+  let pkgCwd = process.env.SEM_PACKAGE_ROOT !== null && process.env.SEM_PACKAGE_ROOT !== ""
+    ? process.env.SEM_PACKAGE_ROOT
+    : process.cwd()
+  let version = process.env.SEM_PACKAGE_VERSION !== null && process.env.SEM_PACKAGE_VERSION !== ""
+    ? process.env.SEM_PACKAGE_VERSION
+    : getPackageVersion(pkgCwd)
+
+  if (args.version) {
+    console.log(`sem v${version}`)
+    process.exit(0)
+    return { success: true, released: false }
+  }
+
+  if (args.debug) {
+    enableDebug()
+  }
+
+  let cwd = args.cwd !== null ? args.cwd : process.cwd()
+  let cliOverrides = {}
+
+  if (args.dryRun) cliOverrides.dryRun = true
+  if (args.noCi) cliOverrides.noCi = true
+  if (args.debug) cliOverrides.debug = true
+  if (args.configJson !== null) cliOverrides.configJson = args.configJson
+
+  let config = loadConfig(cwd, cliOverrides)
+
+  if (args.branch !== null) {
+    let found = false
+    let bi = 0
+    while (bi < config.branches.length) {
+      let b = config.branches[bi]
+      let bName = typeof b === "string" ? b : b.name
+      if (bName === args.branch) {
+        found = true
+        break
+      }
+      bi = bi + 1
+    }
+    if (!found) {
+      config.branches.push(args.branch)
+    }
+  }
+
+  let result = release(config)
+
+  let wantOutputs = args.githubOutput || (process.env.GITHUB_OUTPUT !== null && process.env.GITHUB_OUTPUT !== "")
+  if (wantOutputs) {
+    writeGitHubOutputs(result)
+  }
+
+  if (!result.success) {
+    log.error(`Release failed: ${result.error}`)
+    process.exit(1)
+  } else if (result.released) {
+    log.success(`Released v${result.version}`)
+    process.exit(0)
+  } else {
+    log.info("No release needed")
+    process.exit(0)
+  }
+
+  return result
+}

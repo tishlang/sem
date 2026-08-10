@@ -1,0 +1,66 @@
+// sem/src/github-output.tish
+// Write cycjimmy/semantic-release-action-compatible outputs for GitHub Actions
+
+import { appendFile } from "./host.tish"
+
+fn setOutput(name, value) {
+  let path = process.env.GITHUB_OUTPUT
+  if (path === null || path === "") return
+
+  let str = value !== null ? String(value) : ""
+  if (str.indexOf("\n") !== -1 || str.indexOf("\r") !== -1) {
+    let delim = "SEM_EOF_" + String(Date.now())
+    appendFile(path, name + "<<" + delim + "\n" + str + "\n" + delim + "\n")
+    return
+  }
+
+  appendFile(path, name + "=" + str + "\n")
+}
+
+fn numericPrefix(part) {
+  if (part === null) return "0"
+  let out = ""
+  let i = 0
+  while (i < part.length) {
+    let ch = part.charAt(i)
+    if (ch >= "0" && ch <= "9") {
+      out = out + ch
+    } else {
+      break
+    }
+    i = i + 1
+  }
+  return out !== "" ? out : "0"
+}
+
+export fn writeGitHubOutputs(result) {
+  if (result === null) {
+    setOutput("new_release_published", "false")
+    return
+  }
+
+  let published = result.success === true && result.released === true
+  setOutput("new_release_published", published ? "true" : "false")
+
+  if (result.lastRelease !== null) {
+    let last = result.lastRelease
+    if (last.version !== null) setOutput("last_release_version", last.version)
+    if (last.gitHead !== null) setOutput("last_release_git_head", last.gitHead)
+    if (last.gitTag !== null) setOutput("last_release_git_tag", last.gitTag)
+  }
+
+  if (!published) return
+
+  let version = result.version !== null ? result.version : ""
+  setOutput("new_release_version", version)
+
+  let parts = version.split(".")
+  if (parts.length >= 1) setOutput("new_release_major_version", numericPrefix(parts[0]))
+  if (parts.length >= 2) setOutput("new_release_minor_version", numericPrefix(parts[1]))
+  if (parts.length >= 3) setOutput("new_release_patch_version", numericPrefix(parts[2]))
+
+  if (result.channel !== null) setOutput("new_release_channel", result.channel)
+  if (result.notes !== null) setOutput("new_release_notes", result.notes)
+  if (result.gitHead !== null) setOutput("new_release_git_head", result.gitHead)
+  if (result.tag !== null) setOutput("new_release_git_tag", result.tag)
+}

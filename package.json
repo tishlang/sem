@@ -1,18 +1,53 @@
 {
-  "name": "sem",
+  "name": "@tishlang/sem",
   "version": "1.0.0",
-  "description": "Automated semantic versioning and release pipeline — a full semantic-release clone written in Tish",
-  "main": "src/main.tish",
-  "bin": {
-    "sem": "src/main.tish"
+  "description": "Automated semantic versioning and release pipeline \u2014 a semantic-release clone written in Tish (dual-runtime: Tish + Node)",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tishlang/sem.git"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "tish": {
+    "module": "./src/index.tish"
+  },
+  "main": "./dist/sem.js",
+  "module": "./dist/sem.js",
+  "exports": {
+    ".": {
+      "tish": "./src/index.tish",
+      "import": "./dist/sem.js",
+      "default": "./dist/sem.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "sem": "./bin/sem.js"
+  },
+  "files": [
+    "src/",
+    "dist/",
+    "bin/",
+    "action/",
+    "action.yml",
+    "README.md",
+    "LICENSE",
+    "docs/"
+  ],
   "scripts": {
     "start": "tish run --feature full src/main.tish",
     "release": "tish run --feature full src/main.tish",
-    "release:dry": "tish run --feature full src/main.tish --dry-run",
+    "release:dry": "tish run --feature full src/main.tish --dry-run --no-ci",
+    "build": "mkdir -p dist && tish build src/index.tish -o dist/sem.js --target js",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build",
     "test": "tish run --feature fs,process,regex test/semver.test.tish && tish run --feature fs,process,regex test/commit-parser.test.tish && tish run --feature fs,process,regex test/commit-analyzer.test.tish && tish run --feature fs,process,regex test/release-notes.test.tish",
     "test:integration": "tish run --feature full test/integration.test.tish",
-    "test:all": "npm test && npm run test:integration"
+    "test:node": "npm run build && node bin/sem.js --help && node bin/sem.js --version",
+    "test:all": "npm test && npm run test:integration && npm run test:node"
   },
   "keywords": [
     "semantic-release",
@@ -21,21 +56,30 @@
     "conventional-commits",
     "changelog",
     "automation",
-    "tish"
+    "tish",
+    "github-actions",
+    "semtac"
   ],
-  "author": "",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": ""
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@tishlang/tish": "3.3.3"
   },
   "sem": {
-    "branches": ["main"],
+    "branches": [
+      "main"
+    ],
     "plugins": [
       "@sem/commit-analyzer",
       "@sem/release-notes-generator",
       "@sem/changelog",
-      "@sem/npm",
+      [
+        "@sem/npm",
+        {
+          "npmPublish": false
+        }
+      ],
       "@sem/github",
       "@sem/git"
     ]

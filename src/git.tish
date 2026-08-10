@@ -1,7 +1,8 @@
 // sem/src/git.tish
-// Git operations using Tish process.exec()
+// Git operations using dual-runtime host.execCapture()
 
 import { createLogger } from "./logger.tish"
+import { execCapture } from "./host.tish"
 
 const log = createLogger("git")
 const COMMIT_DELIMITER = "---sem-commit-delimiter---"
@@ -10,7 +11,7 @@ fn execGit(args, cwd) {
   let gitCmd = `git ${args}`
   log.debug(`exec: ${gitCmd}`)
   let cmd = cwd !== null ? `cd "${cwd}" && ${gitCmd}` : gitCmd
-  let result = process.execCapture(cmd)
+  let result = execCapture(cmd)
   if (result.code !== 0) {
     let errMsg = result.stderr !== null ? result.stderr.trim() : `git command failed with code ${result.code}`
     log.debug(`stderr: ${errMsg}`)
