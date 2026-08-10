@@ -20,6 +20,7 @@ import {
 import {
   githubVerifyConditions,
   githubPublish,
+  githubAddChannel,
   githubSuccess,
   githubFail
 } from "./plugins/github/index.tish"
@@ -58,6 +59,7 @@ const npmPlugin = {
 const githubPlugin = {
   verifyConditions: githubVerifyConditions,
   publish: githubPublish,
+  addChannel: githubAddChannel,
   success: githubSuccess,
   fail: githubFail
 }

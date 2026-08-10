@@ -4,27 +4,24 @@
 import { loadConfig } from "./config.tish"
 import { release } from "./orchestrator.tish"
 import { writeGitHubOutputs } from "./github-output.tish"
+import { parseDocument } from "./utils/yaml.tish"
 
 fn getInput(name, fallback) {
   let key = "INPUT_" + name.toUpperCase()
   let v = process.env[key]
-  if (v === null || v === undefined) return fallback
+  if (v === null || v === "") return fallback
   return v
 }
 
 fn asBool(value, defaultValue) {
-  if (value === null || value === undefined || value === "") return defaultValue
+  if (value === null || value === "") return defaultValue
   let s = String(value).trim().toLowerCase()
   return s === "true" || s === "1" || s === "yes" || s === "y" || s === "on"
 }
 
-fn parseJson(raw, label) {
-  if (raw === null || raw === undefined || String(raw).trim() === "") return null
-  try {
-    return JSON.parse(raw)
-  } catch (e) {
-    throw "Invalid JSON for " + label + ": " + String(e)
-  }
+fn parseInputDoc(raw, label) {
+  if (raw === null || String(raw).trim() === "") return null
+  return parseDocument(raw, label)
 }
 
 fn resolvePath(base, rel) {
@@ -53,6 +50,8 @@ fn runAction() {
   let configRaw = getInput("config", "")
   let branchesRaw = getInput("branches", "")
   let tagFormat = getInput("tag_format", "")
+  let force = getInput("force", "")
+  let ignoreBranchesRaw = getInput("ignore_branches", "")
 
   let cliOverrides = {
     dryRun: dryRun,
@@ -63,12 +62,30 @@ fn runAction() {
   if (configRaw !== null && String(configRaw).trim() !== "") {
     cliOverrides.configJson = configRaw
   }
+  if (force !== null && String(force).trim() !== "") {
+    cliOverrides.force = String(force).trim()
+  }
 
   let config = loadConfig(cwd, cliOverrides)
 
-  let branches = parseJson(branchesRaw, "branches")
+  let branches = parseInputDoc(branchesRaw, "branches")
   if (branches !== null) {
     config.branches = branches
+  }
+  let ignoreBranches = parseInputDoc(ignoreBranchesRaw, "ignore_branches")
+  if (ignoreBranches === null && ignoreBranchesRaw !== null && String(ignoreBranchesRaw).trim() !== "") {
+    // Allow comma-separated string as well as JSON/YAML array
+    let parts = String(ignoreBranchesRaw).split(",")
+    ignoreBranches = []
+    let ii = 0
+    while (ii < parts.length) {
+      let p = parts[ii].trim()
+      if (p !== "") ignoreBranches.push(p)
+      ii = ii + 1
+    }
+  }
+  if (ignoreBranches !== null) {
+    config.ignoreBranches = ignoreBranches
   }
   if (tagFormat !== null && String(tagFormat).trim() !== "") {
     config.tagFormat = tagFormat
@@ -78,6 +95,9 @@ fn runAction() {
   config.dryRun = dryRun
   if (!ci) config.noCi = true
   if (debug) config.debug = true
+  if (force !== null && String(force).trim() !== "") {
+    config.force = String(force).trim()
+  }
 
   let result = release(config)
   writeGitHubOutputs(result)

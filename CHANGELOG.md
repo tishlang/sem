@@ -2,6 +2,10 @@
 
 All notable changes to this project will be automatically documented in this file.
 
+## 1.2.1
+
+Forced release (`--force patch`).
+
 ## [1.2.0](https://github.com/tishlang/sem/compare/v1.1.0...v1.2.0) (2026-08-10)
 
 ### Features

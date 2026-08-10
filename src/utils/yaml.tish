@@ -1,0 +1,377 @@
+// sem/src/utils/yaml.tish
+// Minimal YAML 1.2 subset parser for Action / inline config (no deps).
+// Supports: maps, sequences, nested indent, quoted/unquoted scalars,
+// flow []/{} , block scalars | and >, booleans, null, numbers, comments.
+
+fn isSpace(ch) {
+  return ch === " " || ch === "\t"
+}
+
+fn stripComment(line) {
+  let inSingle = false
+  let inDouble = false
+  let i = 0
+  while (i < line.length) {
+    let ch = line.charAt(i)
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle
+    } else if (ch === "\"" && !inSingle) {
+      // handle \"
+      if (i > 0 && line.charAt(i - 1) === "\\") {
+        // still inside string
+      } else {
+        inDouble = !inDouble
+      }
+    } else if (ch === "#" && !inSingle && !inDouble) {
+      return line.slice(0, i).replace(/\s+$/, "")
+    }
+    i = i + 1
+  }
+  return line.replace(/\s+$/, "")
+}
+
+fn indentOf(line) {
+  let i = 0
+  while (i < line.length && isSpace(line.charAt(i))) i = i + 1
+  return i
+}
+
+fn prepareLines(text) {
+  let raw = String(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n")
+  let lines = []
+  let i = 0
+  while (i < raw.length) {
+    let line = stripComment(raw[i])
+    if (line.trim() !== "") {
+      lines.push(line)
+    }
+    i = i + 1
+  }
+  return lines
+}
+
+fn parseScalar(raw) {
+  let s = raw.trim()
+  if (s === "") return ""
+
+  // Quoted strings
+  if ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'"))) {
+    let quote = s.charAt(0)
+    let inner = s.slice(1, s.length - 1)
+    if (quote === "\"") {
+      return inner
+        .replace(/\\n/g, "\n")
+        .replace(/\\t/g, "\t")
+        .replace(/\\"/g, "\"")
+        .replace(/\\\\/g, "\\")
+    }
+    return inner.replace(/''/g, "'")
+  }
+
+  let lower = s.toLowerCase()
+  if (lower === "true" || lower === "yes" || lower === "on") return true
+  if (lower === "false" || lower === "no" || lower === "off") return false
+  if (lower === "null" || lower === "~" || lower === "") return null
+
+  // Integer / float
+  if (s.match(/^-?\d+$/) !== null) return parseInt(s, 10)
+  if (s.match(/^-?\d+\.\d+$/) !== null) return parseFloat(s)
+
+  // Flow JSON-ish
+  if ((s.startsWith("[") && s.endsWith("]")) || (s.startsWith("{") && s.endsWith("}"))) {
+    try {
+      return JSON.parse(s)
+    } catch (e) {
+      // fall through — treat as string
+    }
+  }
+
+  return s
+}
+
+fn looksLikeKey(line) {
+  // key: or key: value  (not starting with -)
+  let t = line.trim()
+  if (t.startsWith("-")) return false
+  if (t.startsWith("{") || t.startsWith("[")) return false
+  let i = 0
+  let inQuote = null
+  while (i < t.length) {
+    let ch = t.charAt(i)
+    if (inQuote !== null) {
+      if (ch === inQuote && (i === 0 || t.charAt(i - 1) !== "\\")) inQuote = null
+    } else if (ch === "\"" || ch === "'") {
+      inQuote = ch
+    } else if (ch === ":") {
+      // end of key — next is space, EOL, or start of value
+      if (i + 1 >= t.length) return true
+      let next = t.charAt(i + 1)
+      return next === " " || next === "\t" || next === "{" || next === "[" || next === "|" || next === ">" || next === "'" || next === "\""
+    }
+    i = i + 1
+  }
+  return false
+}
+
+fn splitKeyValue(line) {
+  let t = line.trim()
+  let i = 0
+  let inQuote = null
+  while (i < t.length) {
+    let ch = t.charAt(i)
+    if (inQuote !== null) {
+      if (ch === inQuote && (i === 0 || t.charAt(i - 1) !== "\\")) inQuote = null
+    } else if (ch === "\"" || ch === "'") {
+      inQuote = ch
+    } else if (ch === ":") {
+      let key = parseScalar(t.slice(0, i))
+      let rest = t.slice(i + 1).trim()
+      return { key: key, value: rest }
+    }
+    i = i + 1
+  }
+  return { key: parseScalar(t), value: "" }
+}
+
+fn spaces(n) {
+  let s = ""
+  let i = 0
+  while (i < n) {
+    s = s + " "
+    i = i + 1
+  }
+  return s
+}
+
+fn parseBlockScalar(lines, start, baseIndent, folded) {
+  // Determine content indent from first non-empty line
+  let contentIndent = -1
+  let scan = start
+  while (scan < lines.length) {
+    let line = lines[scan]
+    if (line.trim() === "") {
+      scan = scan + 1
+      continue
+    }
+    let ind = indentOf(line)
+    if (ind <= baseIndent) break
+    contentIndent = ind
+    break
+  }
+
+  let chunks = []
+  let i = start
+  while (i < lines.length) {
+    let line = lines[i]
+    let ind = indentOf(line)
+    if (line.trim() === "") {
+      chunks.push("")
+      i = i + 1
+      continue
+    }
+    if (ind <= baseIndent) break
+    if (contentIndent === -1) contentIndent = ind
+    chunks.push(line.slice(contentIndent))
+    i = i + 1
+  }
+  if (folded) {
+    let out = ""
+    let j = 0
+    while (j < chunks.length) {
+      let c = chunks[j]
+      if (c === "") {
+        out = out + "\n"
+      } else {
+        if (out !== "" && !out.endsWith("\n")) out = out + " "
+        out = out + c
+      }
+      j = j + 1
+    }
+    return { value: out, next: i }
+  }
+  return { value: chunks.join("\n"), next: i }
+}
+
+// Parse a block starting at `index` with minimum indent `minIndent`
+fn parseNode(lines, index, minIndent) {
+  if (index >= lines.length) {
+    return { value: null, next: index }
+  }
+
+  let first = lines[index]
+  let ind = indentOf(first)
+  if (ind < minIndent) {
+    return { value: null, next: index }
+  }
+
+  let trimmed = first.trim()
+
+  // Sequence
+  if (trimmed.startsWith("- ") || trimmed === "-") {
+    let arr = []
+    let i = index
+    while (i < lines.length) {
+      let line = lines[i]
+      let lineInd = indentOf(line)
+      if (lineInd < ind) break
+      if (lineInd > ind) {
+        // continuation of previous item — shouldn't happen at top of loop
+        break
+      }
+      let t = line.trim()
+      if (!t.startsWith("-")) break
+
+      let rest = t === "-" ? "" : t.slice(2).trim()
+      i = i + 1
+
+      if (rest === "" || rest === "|" || rest === ">") {
+        // Nested block under this list item
+        if (rest === "|" || rest === ">") {
+          let bs = parseBlockScalar(lines, i, ind, rest === ">")
+          arr.push(bs.value)
+          i = bs.next
+        } else {
+          let nested = parseNode(lines, i, ind + 1)
+          arr.push(nested.value)
+          i = nested.next
+        }
+      } else if (rest.startsWith("- ") || rest === "-") {
+        // Nested sequence starting on the same line: `- - item`
+        let synth = []
+        synth.push(spaces(ind + 2) + rest)
+        while (i < lines.length && indentOf(lines[i]) > ind) {
+          synth.push(lines[i])
+          i = i + 1
+        }
+        let nested = parseNode(synth, 0, ind + 2)
+        arr.push(nested.value)
+      } else if (looksLikeKey(rest)) {
+        // Inline map start on same line as `- key: value`
+        let kv = splitKeyValue(rest)
+        let obj = {}
+        if (kv.value === "|" || kv.value === ">") {
+          let bs = parseBlockScalar(lines, i, ind, kv.value === ">")
+          obj[kv.key] = bs.value
+          i = bs.next
+        } else if (kv.value !== "") {
+          obj[kv.key] = parseScalar(kv.value)
+        } else {
+          let nested = parseNode(lines, i, ind + 1)
+          obj[kv.key] = nested.value
+          i = nested.next
+        }
+        // More keys of this map item at greater indent
+        while (i < lines.length) {
+          let more = lines[i]
+          let moreInd = indentOf(more)
+          if (moreInd <= ind) break
+          if (!looksLikeKey(more.trim())) break
+          let mk = splitKeyValue(more.trim())
+          i = i + 1
+          if (mk.value === "|" || mk.value === ">") {
+            let bs = parseBlockScalar(lines, i, moreInd, mk.value === ">")
+            obj[mk.key] = bs.value
+            i = bs.next
+          } else if (mk.value !== "") {
+            obj[mk.key] = parseScalar(mk.value)
+          } else {
+            let nested = parseNode(lines, i, moreInd + 1)
+            obj[mk.key] = nested.value
+            i = nested.next
+          }
+        }
+        arr.push(obj)
+      } else {
+        arr.push(parseScalar(rest))
+      }
+    }
+    return { value: arr, next: i }
+  }
+
+  // Mapping
+  if (looksLikeKey(trimmed)) {
+    let obj = {}
+    let i = index
+    while (i < lines.length) {
+      let line = lines[i]
+      let lineInd = indentOf(line)
+      if (lineInd < ind) break
+      if (lineInd > ind) break
+      let t = line.trim()
+      if (!looksLikeKey(t)) break
+
+      let kv = splitKeyValue(t)
+      i = i + 1
+
+      if (kv.value === "|" || kv.value === ">") {
+        let bs = parseBlockScalar(lines, i, lineInd, kv.value === ">")
+        obj[kv.key] = bs.value
+        i = bs.next
+      } else if (kv.value !== "") {
+        obj[kv.key] = parseScalar(kv.value)
+      } else {
+        // Nested value at greater indent
+        if (i < lines.length && indentOf(lines[i]) > lineInd) {
+          let nested = parseNode(lines, i, lineInd + 1)
+          obj[kv.key] = nested.value
+          i = nested.next
+        } else {
+          obj[kv.key] = null
+        }
+      }
+    }
+    return { value: obj, next: i }
+  }
+
+  // Bare scalar
+  return { value: parseScalar(trimmed), next: index + 1 }
+}
+
+export fn parseYaml(text) {
+  if (text === null) return null
+  let lines = prepareLines(text)
+  if (lines.length === 0) return null
+  let result = parseNode(lines, 0, 0)
+  return result.value
+}
+
+fn looksLikeJson(raw) {
+  let ch = raw.charAt(0)
+  if (ch === "{" || ch === "[" || ch === "\"") return true
+  if (ch === "t" || ch === "f" || ch === "n") return true
+  if (ch >= "0" && ch <= "9") return true
+  if (ch === "-" && raw.length > 1) {
+    let n = raw.charAt(1)
+    if (n >= "0" && n <= "9") return true
+  }
+  return false
+}
+
+fn tryParseJson(raw) {
+  if (!looksLikeJson(raw)) return null
+  try {
+    let v = JSON.parse(raw)
+    // Tish JSON.parse returns null for invalid input instead of throwing
+    if (v === null && raw !== "null") return null
+    return v
+  } catch (e) {
+    return null
+  }
+}
+
+// Prefer JSON when valid; otherwise YAML. Lets Action users pass either.
+export fn parseDocument(text, label) {
+  if (text === null) return null
+  let raw = String(text).trim()
+  if (raw === "") return null
+
+  let asJson = tryParseJson(raw)
+  if (asJson !== null || raw === "null") return asJson
+
+  try {
+    return parseYaml(raw)
+  } catch (yamlErr) {
+    let where = label !== null ? label : "document"
+    throw "Invalid JSON/YAML for " + where + ": " + String(yamlErr)
+  }
+}

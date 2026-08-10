@@ -1,21 +1,21 @@
 {
   "name": "@tishlang/sem",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Automated semantic versioning and release pipeline — a semantic-release clone written in Tish (dual-runtime: Tish + Node)",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tishlang/sem.git"
+    "url": "git+https://github.com/tishlang/sem.git"
   },
   "publishConfig": {
     "access": "public"
   },
   "tish": {
-    "module": "./src/index.tish"
+    "module": "src/index.tish"
   },
-  "main": "./dist/sem.js",
-  "module": "./dist/sem.js",
+  "main": "dist/sem.js",
+  "module": "dist/sem.js",
   "exports": {
     ".": {
       "tish": "./src/index.tish",
@@ -25,7 +25,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "sem": "./dist/cli.js"
+    "sem": "dist/cli.js"
   },
   "files": [
     "src/",
@@ -37,13 +37,13 @@
     "scripts/build.sh"
   ],
   "scripts": {
-    "start": "tish run --feature full src/main.tish",
-    "release": "npm run build && node dist/cli.js --no-ci",
-    "release:dry": "npm run build && node dist/cli.js --dry-run --no-ci",
+    "start": "npm run release",
+    "release": "npm run build && node dist/cli.js",
+    "release:dry": "npm run build && node dist/cli.js --dry-run",
     "build": "bash scripts/build.sh",
     "prepack": "npm run build",
     "prepublishOnly": "npm run build",
-    "test": "tish run --feature fs,process,regex test/semver.test.tish && tish run --feature fs,process,regex test/commit-parser.test.tish && tish run --feature fs,process,regex test/commit-analyzer.test.tish && tish run --feature fs,process,regex test/release-notes.test.tish",
+    "test": "tish run --feature fs,process,regex test/semver.test.tish && tish run --feature fs,process,regex test/commit-parser.test.tish && tish run --feature fs,process,regex test/commit-analyzer.test.tish && tish run --feature fs,process,regex test/release-notes.test.tish && tish run --feature fs,process,regex test/yaml.test.tish",
     "test:integration": "tish run --feature full test/integration.test.tish",
     "test:node": "npm run build && node dist/cli.js --help && node dist/cli.js --version",
     "test:all": "npm test && npm run test:integration && npm run test:node"

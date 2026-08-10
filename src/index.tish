@@ -17,6 +17,8 @@ fn parseArgs(argv) {
     branch: null,
     cwd: null,
     configJson: null,
+    force: null,
+    ignoreBranches: null,
     githubOutput: false,
     help: false,
     version: false
@@ -34,6 +36,18 @@ fn parseArgs(argv) {
       args.debug = true
     } else if (arg === "--github-output") {
       args.githubOutput = true
+    } else if (arg === "--force" || arg === "-f") {
+      if (i + 1 < argv.length) {
+        i = i + 1
+        args.force = argv[i]
+      }
+    } else if (arg.startsWith("--force=")) {
+      args.force = arg.slice("--force=".length)
+    } else if (arg === "--ignore-branches") {
+      if (i + 1 < argv.length) {
+        i = i + 1
+        args.ignoreBranches = argv[i]
+      }
     } else if (arg === "--branch" || arg === "-b") {
       if (i + 1 < argv.length) {
         i = i + 1
@@ -65,24 +79,28 @@ const HELP_TEXT = `
 sem — automated semantic versioning and release pipeline
 
 Usage:
+  npm run release
+  npm run release -- --force patch
   sem [options]
-  tish run --feature full src/main.tish [options]
-  node bin/sem.js [options]
 
 Options:
-  --dry-run            Run without making any changes
-  --no-ci              Skip CI environment check
-  --debug              Enable debug logging
-  --branch <name>      Override the release branch
-  --cwd <path>         Working directory (monorepo package root)
-  --config-json <json> Inline config JSON (skips file / package.json config)
-  --github-output      Write cycjimmy-compatible keys to $GITHUB_OUTPUT
-  --help               Show this help message
-  --version            Show version
+  --dry-run              Run without making any changes
+  --no-ci                Skip CI environment check
+  --debug                Enable debug logging
+  --force <type|version> Force a release: major|minor|patch, or exact x.y.z
+  --ignore-branches <list>  Comma-separated branch globs to soft-skip
+  --branch <name>        Override the release branch
+  --cwd <path>           Working directory (monorepo package root)
+  --config-json <doc>    Inline config JSON or YAML (skips file / package.json config)
+  --github-output        Write Action-compatible keys to $GITHUB_OUTPUT
+  --help                 Show this help message
+  --version              Show version
 
 Environment:
-  SEM_CONFIG           Inline config JSON (same as --config-json)
-  GITHUB_OUTPUT        Path written when --github-output or Action mode
+  SEM_CONFIG             Inline config JSON or YAML (same as --config-json)
+  SEM_FORCE              Same as --force (major|minor|patch|x.y.z)
+  GITHUB_OUTPUT          Path written when --github-output or Action mode
+  NPM_OTP                One-time password for npm 2FA publish
 
 Configuration (when --config-json / SEM_CONFIG not set):
   1. .semrc.json
@@ -147,6 +165,18 @@ export fn runCli(argv) {
   if (args.noCi) cliOverrides.noCi = true
   if (args.debug) cliOverrides.debug = true
   if (args.configJson !== null) cliOverrides.configJson = args.configJson
+  if (args.force !== null) cliOverrides.force = args.force
+  if (args.ignoreBranches !== null && args.ignoreBranches !== "") {
+    let parts = String(args.ignoreBranches).split(",")
+    let list = []
+    let pi = 0
+    while (pi < parts.length) {
+      let p = parts[pi].trim()
+      if (p !== "") list.push(p)
+      pi = pi + 1
+    }
+    cliOverrides.ignoreBranches = list
+  }
 
   let config = loadConfig(cwd, cliOverrides)
 
@@ -179,6 +209,9 @@ export fn runCli(argv) {
     process.exit(1)
   } else if (result.released) {
     log.success(`Released v${result.version}`)
+    process.exit(0)
+  } else if (result.skipped === true) {
+    log.info("Skipped: " + (result.reason !== null ? result.reason : "branch"))
     process.exit(0)
   } else {
     log.info("No release needed")

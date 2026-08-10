@@ -1,0 +1,307 @@
+// sem/src/plugins/github/comments.tish
+// Success/fail comments on issues + PRs associated with release commits
+
+import { render } from "../../utils/template.tish"
+import {
+  apiUrl,
+  githubFetch,
+  responseJson,
+  responseText,
+  resolveApiBase,
+  getToken,
+  getRepoInfo,
+  urlEncode
+} from "./api.tish"
+
+const DEFAULT_SUCCESS_COMMENT =
+  "🎉 This ${issue.kind} has been resolved in version ${nextRelease.version}\n\n" +
+  "The release is available on [GitHub release](${releases.url})"
+
+const DEFAULT_FAIL_TITLE = "The automated release is failing 🚨"
+const DEFAULT_FAIL_COMMENT =
+  "## :rotating_light: The automated release from the `${branch.name}` branch failed.\n\n" +
+  "I will re-run the release automatically when you push new commits.\n\n" +
+  "```\n${errors}\n```"
+const DEFAULT_LABELS = ["sem"]
+
+fn releaseUrlFromContext(context) {
+  if (context.releases === null) return ""
+  let ri = 0
+  while (ri < context.releases.length) {
+    let rel = context.releases[ri]
+    if (rel !== null && rel.name === "GitHub Release" && rel.url !== null) {
+      return rel.url
+    }
+    ri = ri + 1
+  }
+  return ""
+}
+
+fn collectIssueNumbers(commits) {
+  let issues = []
+  let seen = {}
+  if (commits === null) return issues
+  let ci = 0
+  while (ci < commits.length) {
+    let commit = commits[ci]
+    if (commit.references !== null) {
+      let ri = 0
+      while (ri < commit.references.length) {
+        let ref = commit.references[ri]
+        let num = ref.issue
+        if (num !== null && seen[String(num)] === null) {
+          issues.push(String(num))
+          seen[String(num)] = true
+        }
+        ri = ri + 1
+      }
+    }
+    ci = ci + 1
+  }
+  return issues
+}
+
+// GET /repos/{owner}/{repo}/commits/{sha}/pulls — associate PRs with release commits
+export fn findAssociatedPullRequests(apiBase, token, repoInfo, commits, logger) {
+  let prs = []
+  let seen = {}
+  if (commits === null) return prs
+
+  let ci = 0
+  while (ci < commits.length) {
+    let commit = commits[ci]
+    let sha = commit.hash !== null ? commit.hash : commit.commit !== null ? commit.commit.long : null
+    if (sha === null || sha === "") {
+      ci = ci + 1
+      continue
+    }
+    let url = apiUrl(
+      apiBase,
+      "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/commits/" + sha + "/pulls"
+    )
+    try {
+      let response = githubFetch(url, "GET", token, null)
+      // Media type for commit pull association
+      if (response.status === 200) {
+        let list = responseJson(response)
+        if (Array.isArray(list)) {
+          let pi = 0
+          while (pi < list.length) {
+            let pr = list[pi]
+            if (pr !== null && pr.number !== null && seen[String(pr.number)] === null) {
+              seen[String(pr.number)] = true
+              prs.push(pr)
+            }
+            pi = pi + 1
+          }
+        }
+      }
+    } catch (e) {
+      if (logger !== null) {
+        logger.debug("Failed to list PRs for commit " + sha + ": " + String(e))
+      }
+    }
+    ci = ci + 1
+  }
+  return prs
+}
+
+fn postIssueComment(apiBase, token, repoInfo, number, body) {
+  let url = apiUrl(
+    apiBase,
+    "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/issues/" + String(number) + "/comments"
+  )
+  let response = githubFetch(url, "POST", token, { body: body })
+  return response.status === 201
+}
+
+fn addLabels(apiBase, token, repoInfo, number, labels) {
+  if (labels === null || labels === false || !Array.isArray(labels) || labels.length === 0) {
+    return
+  }
+  let url = apiUrl(
+    apiBase,
+    "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/issues/" + String(number) + "/labels"
+  )
+  githubFetch(url, "POST", token, { labels: labels })
+}
+
+fn commentTargets(pluginConfig, context, apiBase, token, repoInfo, logger) {
+  let targets = []
+  let seen = {}
+
+  // Issues referenced in commits
+  let issues = collectIssueNumbers(context.commits)
+  let ii = 0
+  while (ii < issues.length) {
+    let n = issues[ii]
+    if (seen[n] === null) {
+      seen[n] = true
+      targets.push({ number: n, kind: "issue" })
+    }
+    ii = ii + 1
+  }
+
+  // Associated PRs (parity with @semantic-release/github)
+  let prs = findAssociatedPullRequests(apiBase, token, repoInfo, context.commits, logger)
+  let pi = 0
+  while (pi < prs.length) {
+    let pr = prs[pi]
+    let n = String(pr.number)
+    if (seen[n] === null) {
+      seen[n] = true
+      targets.push({ number: n, kind: "PR" })
+    }
+    pi = pi + 1
+  }
+
+  return targets
+}
+
+export fn commentSuccess(pluginConfig, context) {
+  let logger = context.logger
+  let env = context.env
+  let token = getToken(env)
+  let repoInfo = getRepoInfo(context)
+  if (token === null || repoInfo === null) return null
+  if (context.options.dryRun) return null
+
+  // successComment: false disables; null → default
+  if (pluginConfig.successComment === false) {
+    logger.info("successComment disabled — skipping issue/PR comments")
+    return null
+  }
+
+  let apiBase = resolveApiBase(pluginConfig, env)
+  let commentTemplate =
+    pluginConfig.successComment !== null && pluginConfig.successComment !== ""
+      ? pluginConfig.successComment
+      : DEFAULT_SUCCESS_COMMENT
+
+  let releaseUrl = releaseUrlFromContext(context)
+  let targets = commentTargets(pluginConfig, context, apiBase, token, repoInfo, logger)
+
+  let commented = 0
+  let ti = 0
+  while (ti < targets.length) {
+    let t = targets[ti]
+    let body = render(commentTemplate, {
+      nextRelease: context.nextRelease,
+      lastRelease: context.lastRelease,
+      releases: { url: releaseUrl },
+      releaseUrl: releaseUrl,
+      issue: { kind: t.kind, number: t.number },
+      branch: context.branch
+    })
+
+    try {
+      if (postIssueComment(apiBase, token, repoInfo, t.number, body)) {
+        commented = commented + 1
+      }
+    } catch (e) {
+      logger.debug("Failed to comment on " + t.kind + " #" + t.number + ": " + String(e))
+    }
+
+    // releasedLabels: false disables; null → no labels (config must opt in)
+    let releasedLabels = pluginConfig.releasedLabels
+    if (releasedLabels !== false && releasedLabels !== null) {
+      try {
+        addLabels(apiBase, token, repoInfo, t.number, releasedLabels)
+      } catch (e) {
+        logger.debug("Failed to label #" + t.number + ": " + String(e))
+      }
+    }
+
+    ti = ti + 1
+  }
+
+  if (commented > 0) {
+    logger.success(
+      "Commented on " + String(commented) + " issue" + (commented > 1 ? "s" : "") + "/PR" + (commented > 1 ? "s" : "")
+    )
+  }
+
+  return null
+}
+
+fn findOpenFailIssue(apiBase, token, repoInfo, failTitle) {
+  // Search open issues with exact title
+  let q =
+    "repo:" + repoInfo.owner + "/" + repoInfo.repo +
+    " is:issue is:open in:title \"" + failTitle + "\""
+  let url = apiUrl(apiBase, "/search/issues?q=" + urlEncode(q) + "&per_page=1")
+  let response = githubFetch(url, "GET", token, null)
+  if (response.status !== 200) return null
+  let data = responseJson(response)
+  if (data === null || data.items === null || data.items.length === 0) return null
+  return data.items[0]
+}
+
+export fn reportFailure(pluginConfig, context) {
+  let logger = context.logger
+  let env = context.env
+  let token = getToken(env)
+  let repoInfo = getRepoInfo(context)
+  if (token === null || repoInfo === null) return null
+  if (context.options.dryRun) return null
+
+  // failComment: false → don't open/update issues
+  if (pluginConfig.failComment === false || pluginConfig.failTitle === false) {
+    logger.info("failComment/failTitle disabled — skipping failure issue")
+    return null
+  }
+
+  let apiBase = resolveApiBase(pluginConfig, env)
+  let failTitle =
+    pluginConfig.failTitle !== null && pluginConfig.failTitle !== ""
+      ? pluginConfig.failTitle
+      : DEFAULT_FAIL_TITLE
+  let failTemplate =
+    pluginConfig.failComment !== null && pluginConfig.failComment !== ""
+      ? pluginConfig.failComment
+      : DEFAULT_FAIL_COMMENT
+  let labels =
+    pluginConfig.labels !== null && pluginConfig.labels !== false
+      ? pluginConfig.labels
+      : DEFAULT_LABELS
+
+  let errorMsg = context.errors !== null ? JSON.stringify(context.errors) : "Unknown error"
+  let body = render(failTemplate, {
+    branch: context.branch,
+    errors: errorMsg,
+    nextRelease: context.nextRelease,
+    lastRelease: context.lastRelease
+  })
+
+  try {
+    let existing = findOpenFailIssue(apiBase, token, repoInfo, failTitle)
+    if (existing !== null && existing.number !== null) {
+      if (postIssueComment(apiBase, token, repoInfo, existing.number, body)) {
+        logger.warn("Updated failure issue #" + String(existing.number))
+      }
+      return null
+    }
+
+    let payload = {
+      title: failTitle,
+      body: body,
+      labels: labels
+    }
+    if (pluginConfig.assignees !== null && Array.isArray(pluginConfig.assignees)) {
+      payload.assignees = pluginConfig.assignees
+    }
+
+    let url = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/issues")
+    let response = githubFetch(url, "POST", token, payload)
+    if (response.status === 201) {
+      let issueData = responseJson(response)
+      logger.warn("Opened failure issue: " + issueData.html_url)
+    } else {
+      logger.error("Failed to open failure issue: " + responseText(response))
+    }
+  } catch (e) {
+    logger.error("Failed to report release failure: " + String(e))
+  }
+
+  return null
+}

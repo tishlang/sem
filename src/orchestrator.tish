@@ -7,6 +7,9 @@ import * as gitOps from "./git.tish"
 import * as semver from "./semver.tish"
 import { parseCommit } from "./commit-parser.tish"
 import { parseGitUrl } from "./utils/url.tish"
+import { readFile, fileExists } from "./host.tish"
+import { npmHasVersion } from "./plugins/npm/index.tish"
+import { normalizeForce, describeForce } from "./force.tish"
 
 const log = createLogger("core")
 
@@ -36,6 +39,55 @@ fn parseTagVersion(tag, tagFormat) {
   return version
 }
 
+// Simple glob: exact match, or `*` / `**` wildcards (`feat/*`, `dependabot/**`)
+fn matchBranchPattern(pattern, name) {
+  if (pattern === null || name === null) return false
+  if (pattern === name) return true
+  if (pattern === "*") return true
+
+  // Escape regex specials except *, then map * → .*
+  let reSrc = "^"
+  let i = 0
+  while (i < pattern.length) {
+    let ch = pattern.charAt(i)
+    if (ch === "*") {
+      reSrc = reSrc + ".*"
+    } else if (
+      ch === "." || ch === "+" || ch === "?" || ch === "^" || ch === "$" ||
+      ch === "(" || ch === ")" || ch === "[" || ch === "]" || ch === "{" ||
+      ch === "}" || ch === "|" || ch === "\\"
+    ) {
+      reSrc = reSrc + "\\" + ch
+    } else {
+      reSrc = reSrc + ch
+    }
+    i = i + 1
+  }
+  reSrc = reSrc + "$"
+  try {
+    let re = new RegExp(reSrc)
+    return name.match(re) !== null
+  } catch (e) {
+    return false
+  }
+}
+
+fn isIgnoredBranch(config, currentBranch) {
+  let ignores = config.ignoreBranches
+  if (ignores === null || !Array.isArray(ignores) || ignores.length === 0) {
+    return false
+  }
+  let i = 0
+  while (i < ignores.length) {
+    let pattern = ignores[i]
+    if (typeof pattern === "string" && matchBranchPattern(pattern, currentBranch)) {
+      return true
+    }
+    i = i + 1
+  }
+  return false
+}
+
 fn determineBranch(config, currentBranch) {
   let branches = config.branches
   if (branches === null || !Array.isArray(branches)) {
@@ -59,7 +111,7 @@ fn determineBranch(config, currentBranch) {
       range = branchConfig.range !== null ? branchConfig.range : null
     }
 
-    if (branchName === currentBranch) {
+    if (branchName !== null && matchBranchPattern(branchName, currentBranch)) {
       return {
         name: currentBranch,
         channel: channel,
@@ -97,20 +149,37 @@ export fn release(config) {
   }
   log.info(`Branch: ${currentBranch}`)
 
-  // Check if branch is configured for releases
-  let branch = determineBranch(config, currentBranch)
-  if (branch === null) {
-    log.error(`Branch '${currentBranch}' is not configured for releases`)
-    log.info(`Configured branches: ${JSON.stringify(config.branches)}`)
-    return { success: false, error: `Branch '${currentBranch}' is not configured for releases` }
+  // Explicit ignores (e.g. dependabot/*) — soft-skip, exit 0
+  if (isIgnoredBranch(config, currentBranch)) {
+    log.info(`Branch '${currentBranch}' is ignored — skipping release`)
+    return {
+      success: true,
+      released: false,
+      skipped: true,
+      reason: "ignored-branch",
+      branch: currentBranch
+    }
   }
 
-  // CI check
-  if (config.ci && env.CI === null && env.GITHUB_ACTIONS === null && env.TRAVIS === null && env.CIRCLECI === null) {
-    if (!config.noCi) {
-      log.warn("Not running in a CI environment. Use --no-ci to force.")
-      // Don't fail — just warn
+  // Not a release branch — soft-skip (Actions already filter; don't fail the job)
+  let branch = determineBranch(config, currentBranch)
+  if (branch === null) {
+    log.info(
+      `Branch '${currentBranch}' is not a release branch (configured: ${JSON.stringify(config.branches)}) — skipping`
+    )
+    return {
+      success: true,
+      released: false,
+      skipped: true,
+      reason: "non-release-branch",
+      branch: currentBranch
     }
+  }
+
+  // Local runs: treat as allowed (no --no-ci required)
+  let inCi = env.CI !== null || env.GITHUB_ACTIONS !== null || env.TRAVIS !== null || env.CIRCLECI !== null
+  if (!inCi) {
+    config.noCi = true
   }
 
   // Get repository URL
@@ -187,15 +256,6 @@ export fn release(config) {
   context.commits = parsedCommits
   log.info(`Found ${parsedCommits.length} commits since last release`)
 
-  if (parsedCommits.length === 0) {
-    log.info("No commits found — nothing to release")
-    return {
-      success: true,
-      released: false,
-      lastRelease: context.lastRelease
-    }
-  }
-
   // === LIFECYCLE EXECUTION ===
 
   try {
@@ -203,76 +263,156 @@ export fn release(config) {
     log.blank()
     runPlugins("verifyConditions", plugins, context)
 
-    // 2. analyzeCommits
+    // 2. analyzeCommits, --force, or republish last tag if missing from npm
     log.blank()
-    let releaseType = runAnalyzeCommits(plugins, context)
+    let releaseType = null
+    let republish = false
+    let forceExactVersion = null
+    let force = normalizeForce(config.force)
+    if (force === null && env.SEM_FORCE !== null && env.SEM_FORCE !== "") {
+      force = normalizeForce(env.SEM_FORCE)
+    }
+    if (config.force !== null && config.force !== "" && force === null) {
+      log.error(`Invalid --force value: ${config.force} (use major|minor|patch or x.y.z)`)
+      return { success: false, error: "Invalid --force value" }
+    }
+
+    if (force !== null) {
+      log.highlight("Force release", describeForce(force))
+      if (force.kind === "bump") {
+        releaseType = force.type
+      } else if (force.kind === "version") {
+        forceExactVersion = force.version
+        releaseType = "force"
+      }
+    } else if (parsedCommits.length === 0) {
+      log.info("No commits since last release")
+    } else {
+      releaseType = runAnalyzeCommits(plugins, context)
+    }
 
     if (releaseType === null) {
-      log.info("No release type determined — no release needed")
-      return {
-        success: true,
-        released: false,
-        lastRelease: context.lastRelease
+      let pkgName = null
+      let pkgPath = `${cwd}/package.json`
+      if (fileExists(pkgPath)) {
+        let pkg = JSON.parse(readFile(pkgPath))
+        pkgName = pkg.name
       }
-    }
-
-    log.highlight("Release type", releaseType)
-
-    // Calculate next version
-    let nextVersion = semver.increment(context.lastRelease.version, releaseType, branch.prerelease)
-    if (nextVersion === null) {
-      log.error(`Failed to calculate next version from ${context.lastRelease.version} with bump ${releaseType}`)
-      return { success: false, error: "Version calculation failed" }
-    }
-
-    // Handle prerelease
-    if (branch.prerelease !== null) {
-      let preId = typeof branch.prerelease === "string" ? branch.prerelease : branch.name
-      if (releaseType === "major") {
-        nextVersion = semver.increment(context.lastRelease.version, "premajor", preId)
-      } else if (releaseType === "minor") {
-        nextVersion = semver.increment(context.lastRelease.version, "preminor", preId)
+      let lastVer = context.lastRelease !== null ? context.lastRelease.version : null
+      let lastTag = context.lastRelease !== null ? context.lastRelease.gitTag : null
+      if (
+        pkgName !== null &&
+        lastVer !== null &&
+        lastVer !== "0.0.0" &&
+        lastTag !== null &&
+        !npmHasVersion(pkgName, lastVer)
+      ) {
+        log.info(`${pkgName}@${lastVer} is tagged (${lastTag}) but missing from npm — publishing`)
+        republish = true
+        releaseType = "patch"
+        context.nextRelease = {
+          type: "republish",
+          version: lastVer,
+          gitTag: lastTag,
+          gitHead: context.lastRelease.gitHead !== null ? context.lastRelease.gitHead : gitOps.getHead(cwd),
+          channel: null,
+          notes: "Republish " + lastVer + " (git tag existed; package was not on npm)"
+        }
       } else {
-        nextVersion = semver.increment(context.lastRelease.version, "prepatch", preId)
+        log.info("No release type determined — no release needed")
+        log.info("Tip: force a release with --force patch|minor|major (or --force 1.2.3)")
+        return {
+          success: true,
+          released: false,
+          lastRelease: context.lastRelease
+        }
       }
     }
 
-    let nextTag = buildTagName(tagFormat, nextVersion)
-    let channel = branch.channel !== null ? branch.channel : (branch.main ? null : branch.name)
+    let nextVersion = null
+    let nextTag = null
+    let channel = null
+    let notes = ""
 
-    context.nextRelease = {
-      type: releaseType,
-      version: nextVersion,
-      gitTag: nextTag,
-      gitHead: gitOps.getHead(cwd),
-      channel: channel,
-      notes: ""
-    }
+    if (!republish) {
+      if (forceExactVersion !== null) {
+        nextVersion = forceExactVersion
+        log.highlight("Forced version", nextVersion)
+      } else {
+        log.highlight("Release type", releaseType)
 
-    log.highlight("Next version", nextVersion)
-    log.highlight("Next tag", nextTag)
-    if (channel !== null) log.highlight("Channel", channel)
+        // Calculate next version
+        nextVersion = semver.increment(context.lastRelease.version, releaseType, branch.prerelease)
+        if (nextVersion === null) {
+          log.error(`Failed to calculate next version from ${context.lastRelease.version} with bump ${releaseType}`)
+          return { success: false, error: "Version calculation failed" }
+        }
 
-    // 3. verifyRelease
-    log.blank()
-    runPlugins("verifyRelease", plugins, context)
+        // Handle prerelease
+        if (branch.prerelease !== null) {
+          let preId = typeof branch.prerelease === "string" ? branch.prerelease : branch.name
+          if (releaseType === "major") {
+            nextVersion = semver.increment(context.lastRelease.version, "premajor", preId)
+          } else if (releaseType === "minor") {
+            nextVersion = semver.increment(context.lastRelease.version, "preminor", preId)
+          } else {
+            nextVersion = semver.increment(context.lastRelease.version, "prepatch", preId)
+          }
+        }
+      }
 
-    // 4. generateNotes
-    log.blank()
-    let notes = runGenerateNotes(plugins, context)
-    context.nextRelease.notes = notes
+      nextTag = buildTagName(tagFormat, nextVersion)
+      channel = branch.channel !== null ? branch.channel : (branch.main ? null : branch.name)
 
-    // 5. prepare
-    log.blank()
-    runPlugins("prepare", plugins, context)
+      context.nextRelease = {
+        type: forceExactVersion !== null ? "force" : releaseType,
+        version: nextVersion,
+        gitTag: nextTag,
+        gitHead: gitOps.getHead(cwd),
+        channel: channel,
+        notes: ""
+      }
 
-    // Create git tag (core responsibility, not plugin)
-    if (!config.dryRun) {
-      gitOps.tag(nextTag, null, cwd)
-      gitOps.push("origin", null, true, cwd) // Push tags
-      log.success(`Created and pushed tag ${nextTag}`)
+      log.highlight("Next version", nextVersion)
+      log.highlight("Next tag", nextTag)
+      if (channel !== null) log.highlight("Channel", channel)
+
+      // 3. verifyRelease
+      log.blank()
+      runPlugins("verifyRelease", plugins, context)
+
+      // 4. generateNotes
+      log.blank()
+      notes = runGenerateNotes(plugins, context)
+      if ((notes === null || notes === "") && force !== null) {
+        notes = "## " + nextVersion + "\n\nForced release (`--force " + (forceExactVersion !== null ? forceExactVersion : releaseType) + "`)."
+      }
+      context.nextRelease.notes = notes
+
+      // 5. prepare
+      log.blank()
+      runPlugins("prepare", plugins, context)
+
+      // Create git tag (core responsibility, not plugin)
+      if (!config.dryRun) {
+        if (!gitOps.tag(nextTag, null, cwd)) {
+          throw "Failed to create tag " + nextTag
+        }
+        // Force-push the release tag so CI re-runs can move it (matches tish release flow)
+        if (!gitOps.pushTag(nextTag, "origin", true, cwd)) {
+          throw "Failed to push tag " + nextTag
+        }
+        log.success(`Created and pushed tag ${nextTag}`)
+      } else {
+        log.info(`[dry-run] Would create tag ${nextTag}`)
+      }
     } else {
-      log.info(`[dry-run] Would create tag ${nextTag}`)
+      nextVersion = context.nextRelease.version
+      nextTag = context.nextRelease.gitTag
+      channel = context.nextRelease.channel
+      notes = context.nextRelease.notes
+      log.highlight("Republish version", nextVersion)
+      log.highlight("Existing tag", nextTag)
     }
 
     // 6. publish

@@ -1,63 +1,38 @@
 // sem/src/plugins/github/index.tish
-// Clone of @semantic-release/github
-// Creates GitHub releases, comments on issues, reports failures
+// @sem/github — modular clone of @semantic-release/github
+//
+// Config (all optional):
+//   assets            string | {path,name,label}[]  — upload to the release
+//   prerelease         true | false | "channel"     — default "channel" (auto from nextRelease.channel)
+//   draftRelease       boolean                      — create as draft
+//   targetCommitish    string                       — branch or SHA (tish: release/vX.Y.Z)
+//   releaseNameTemplate / releaseBodyTemplate       — ${nextRelease.version} etc.
+//   successComment     string | false               — issue/PR comment (false disables)
+//   failComment        string | false
+//   failTitle          string | false
+//   labels             string[] | false             — labels on fail issue
+//   assignees          string[]
+//   releasedLabels     string[] | false             — labels on resolved issues/PRs
+//   githubUrl / githubApiUrl / githubApiPathPrefix  — GHE
 
-import { parseGitUrl } from "../../utils/url.tish"
-import { render } from "../../utils/template.tish"
+import {
+  apiUrl,
+  githubFetch,
+  resolveApiBase,
+  getToken,
+  getRepoInfo
+} from "./api.tish"
+import { createOrUpdateRelease, updateReleaseChannel } from "./release.tish"
+import { commentSuccess, reportFailure } from "./comments.tish"
 
-const DEFAULT_GITHUB_URL = "https://api.github.com"
-const DEFAULT_SUCCESS_COMMENT = "🎉 This issue has been resolved in version " + "$" + "{nextRelease.version}\n\nThe release is available on [GitHub release](" + "$" + "{releaseUrl})"
-const DEFAULT_FAIL_TITLE = "The automated release is failing 🚨"
-const DEFAULT_LABELS = ["sem"]
-
-fn getToken(env) {
-  if (env.GITHUB_TOKEN !== null && env.GITHUB_TOKEN !== "") return env.GITHUB_TOKEN
-  if (env.GH_TOKEN !== null && env.GH_TOKEN !== "") return env.GH_TOKEN
-  return null
-}
-
-fn getRepoInfo(context) {
-  let repoUrl = context.options.repositoryUrl
-  if (repoUrl === null) return null
-  return parseGitUrl(repoUrl)
-}
-
-fn apiUrl(baseUrl, path) {
-  let base = baseUrl !== null ? baseUrl : DEFAULT_GITHUB_URL
-  // Remove trailing slash
-  if (base.endsWith("/")) base = base.slice(0, base.length - 1)
-  return `${base}${path}`
-}
-
-fn githubFetch(url, method, token, body) {
-  let headers = {
-    "Accept": "application/vnd.github.v3+json",
-    "User-Agent": "sem-release",
-    "Authorization": `Bearer ${token}`
-  }
-
-  let options = {
-    method: method,
-    headers: headers
-  }
-
-  if (body !== null) {
-    options.body = JSON.stringify(body)
-    headers["Content-Type"] = "application/json"
-  }
-
-  let response = fetch(url, options)
-  return response
-}
-
-// verifyConditions — check GitHub token and API access
+// verifyConditions — token + repo API access
 export fn githubVerifyConditions(pluginConfig, context) {
   let logger = context.logger
   let env = context.env
 
   let token = getToken(env)
   if (token === null) {
-    throw "GitHub token not found. Set GITHUB_TOKEN or GH_TOKEN environment variable."
+    throw "GitHub token not found. Set GITHUB_TOKEN or GH_TOKEN (or authenticate `gh`)."
   }
 
   let repoInfo = getRepoInfo(context)
@@ -65,9 +40,8 @@ export fn githubVerifyConditions(pluginConfig, context) {
     throw "Could not determine repository info from remote URL"
   }
 
-  // Verify API access
-  let baseUrl = pluginConfig.githubUrl !== null ? pluginConfig.githubUrl : DEFAULT_GITHUB_URL
-  let url = apiUrl(baseUrl, `/repos/${repoInfo.owner}/${repoInfo.repo}`)
+  let apiBase = resolveApiBase(pluginConfig, env)
+  let url = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo)
 
   try {
     let response = githubFetch(url, "GET", token, null)
@@ -75,199 +49,32 @@ export fn githubVerifyConditions(pluginConfig, context) {
       throw "GitHub token is invalid or lacks required permissions"
     }
     if (response.status === 404) {
-      throw `Repository ${repoInfo.owner}/${repoInfo.repo} not found`
+      throw "Repository " + repoInfo.owner + "/" + repoInfo.repo + " not found"
     }
-    logger.info(`Verified GitHub access for ${repoInfo.owner}/${repoInfo.repo}`)
+    logger.info("Verified GitHub access for " + repoInfo.owner + "/" + repoInfo.repo)
   } catch (e) {
-    throw `GitHub API verification failed: ${e}`
+    throw "GitHub API verification failed: " + String(e)
   }
 
   return null
 }
 
-// publish — create a GitHub Release
+// publish — create/update release + upload assets
 export fn githubPublish(pluginConfig, context) {
-  let logger = context.logger
-  let env = context.env
-  let token = getToken(env)
-  let repoInfo = getRepoInfo(context)
-
-  if (token === null || repoInfo === null) return null
-
-  let baseUrl = pluginConfig.githubUrl !== null ? pluginConfig.githubUrl : DEFAULT_GITHUB_URL
-  let url = apiUrl(baseUrl, `/repos/${repoInfo.owner}/${repoInfo.repo}/releases`)
-
-  let tagName = context.nextRelease.gitTag
-  let releaseName = `v${context.nextRelease.version}`
-  let body = context.nextRelease.notes !== null ? context.nextRelease.notes : ""
-
-  // Determine if prerelease
-  let isPrerelease = context.nextRelease.channel !== null &&
-    context.nextRelease.channel !== "" &&
-    context.nextRelease.channel !== "latest"
-
-  if (context.options.dryRun) {
-    logger.info(`[dry-run] Would create GitHub Release ${releaseName}`)
-    return {
-      name: "GitHub Release",
-      url: `https://${repoInfo.host}/${repoInfo.owner}/${repoInfo.repo}/releases/tag/${tagName}`
-    }
-  }
-
-  let releaseData = {
-    tag_name: tagName,
-    name: releaseName,
-    body: body,
-    prerelease: isPrerelease,
-    draft: false
-  }
-
-  try {
-    let response = githubFetch(url, "POST", token, releaseData)
-
-    if (response.status !== 201) {
-      let respBody = response.text()
-      throw `Failed to create GitHub release: ${response.status} ${respBody}`
-    }
-
-    let releaseResponse = response.json()
-    let releaseUrl = releaseResponse.html_url
-
-    logger.success(`Created GitHub Release: ${releaseUrl}`)
-
-    return {
-      name: "GitHub Release",
-      url: releaseUrl
-    }
-  } catch (e) {
-    throw `GitHub release creation failed: ${e}`
-  }
+  return createOrUpdateRelease(pluginConfig, context)
 }
 
-// success — comment on resolved issues
+// addChannel — promote/demote prerelease flag when a version is added to a channel
+export fn githubAddChannel(pluginConfig, context) {
+  return updateReleaseChannel(pluginConfig, context)
+}
+
+// success — comment on associated issues and PRs
 export fn githubSuccess(pluginConfig, context) {
-  let logger = context.logger
-  let env = context.env
-  let token = getToken(env)
-  let repoInfo = getRepoInfo(context)
-
-  if (token === null || repoInfo === null) return null
-  if (context.options.dryRun) return null
-
-  let baseUrl = pluginConfig.githubUrl !== null ? pluginConfig.githubUrl : DEFAULT_GITHUB_URL
-  let commentTemplate = pluginConfig.successComment !== null ? pluginConfig.successComment : DEFAULT_SUCCESS_COMMENT
-
-  // Find release URL from published releases
-  let releaseUrl = ""
-  if (context.releases !== null) {
-    let ri = 0
-    while (ri < context.releases.length) {
-      let rel = context.releases[ri]
-      if (rel !== null && rel.name === "GitHub Release" && rel.url !== null) {
-        releaseUrl = rel.url
-      }
-      ri = ri + 1
-    }
-  }
-
-  // Collect all issue references from commits
-  let issues = []
-  let seenIssues = {}
-  if (context.commits !== null) {
-    let ci = 0
-    while (ci < context.commits.length) {
-      let commit = context.commits[ci]
-      if (commit.references !== null) {
-        let ri = 0
-        while (ri < commit.references.length) {
-          let ref = commit.references[ri]
-          if (seenIssues[ref.issue] === null) {
-            issues.push(ref.issue)
-            seenIssues[ref.issue] = true
-          }
-          ri = ri + 1
-        }
-      }
-      ci = ci + 1
-    }
-  }
-
-  // Comment on each issue
-  let commented = 0
-  let ii = 0
-  while (ii < issues.length) {
-    let issue = issues[ii]
-    let commentBody = render(commentTemplate, {
-      nextRelease: context.nextRelease,
-      lastRelease: context.lastRelease,
-      releaseUrl: releaseUrl
-    })
-
-    let url = apiUrl(baseUrl, `/repos/${repoInfo.owner}/${repoInfo.repo}/issues/${issue}/comments`)
-
-    try {
-      let response = githubFetch(url, "POST", token, { body: commentBody })
-      if (response.status === 201) {
-        commented = commented + 1
-      }
-    } catch (e) {
-      logger.debug(`Failed to comment on issue #${issue}: ${e}`)
-    }
-
-    // Add released label
-    let releasedLabels = pluginConfig.releasedLabels
-    if (releasedLabels !== null && releasedLabels.length > 0) {
-      let labelUrl = apiUrl(baseUrl, `/repos/${repoInfo.owner}/${repoInfo.repo}/issues/${issue}/labels`)
-      try {
-        githubFetch(labelUrl, "POST", token, { labels: releasedLabels })
-      } catch (e) {
-        logger.debug(`Failed to add labels to issue #${issue}: ${e}`)
-      }
-    }
-
-    ii = ii + 1
-  }
-
-  if (commented > 0) {
-    logger.success(`Commented on ${commented} issue${commented > 1 ? "s" : ""}`)
-  }
-
-  return null
+  return commentSuccess(pluginConfig, context)
 }
 
-// fail — open an issue about the release failure
+// fail — open or update a failure issue
 export fn githubFail(pluginConfig, context) {
-  let logger = context.logger
-  let env = context.env
-  let token = getToken(env)
-  let repoInfo = getRepoInfo(context)
-
-  if (token === null || repoInfo === null) return null
-  if (context.options.dryRun) return null
-
-  let baseUrl = pluginConfig.githubUrl !== null ? pluginConfig.githubUrl : DEFAULT_GITHUB_URL
-  let failTitle = pluginConfig.failTitle !== null ? pluginConfig.failTitle : DEFAULT_FAIL_TITLE
-  let labels = pluginConfig.labels !== null ? pluginConfig.labels : DEFAULT_LABELS
-
-  let errorMsg = context.errors !== null ? JSON.stringify(context.errors) : "Unknown error"
-  let body = `## Automated Release Failure\n\nThe automated release from branch \`${context.branch.name}\` failed.\n\n### Error\n\n\`\`\`\n${errorMsg}\n\`\`\`\n\n---\n\n*This issue was automatically created by [sem](https://github.com/sem).*`
-
-  let url = apiUrl(baseUrl, `/repos/${repoInfo.owner}/${repoInfo.repo}/issues`)
-
-  try {
-    let response = githubFetch(url, "POST", token, {
-      title: failTitle,
-      body: body,
-      labels: labels
-    })
-
-    if (response.status === 201) {
-      let issueData = response.json()
-      logger.warn(`Opened failure issue: ${issueData.html_url}`)
-    }
-  } catch (e) {
-    logger.error(`Failed to open failure issue: ${e}`)
-  }
-
-  return null
+  return reportFailure(pluginConfig, context)
 }

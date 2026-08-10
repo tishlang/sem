@@ -4,6 +4,16 @@
 
 import { readFile, writeFile, fileExists, execCapture } from "../../host.tish"
 
+// True when name@version is already on the registry
+export fn npmHasVersion(name, version) {
+  if (name === null || version === null || version === "") return false
+  let spec = name + "@" + version
+  let result = execCapture("npm view " + JSON.stringify(spec) + " version")
+  if (result.code !== 0) return false
+  let out = result.stdout !== null ? result.stdout.trim() : ""
+  return out === version
+}
+
 // verifyConditions — check npm auth
 export fn npmVerifyConditions(pluginConfig, context) {
   let logger = context.logger
@@ -112,8 +122,21 @@ export fn npmPublish(pluginConfig, context) {
     }
   }
 
+  let publishDir = `${cwd}/${pkgRoot}`
+
+  // Ensure tish-built bin/dist exists before npm validates package.json bin
+  let buildResult = execCapture(`cd "${publishDir}" && npm run build`)
+  if (buildResult.code !== 0) {
+    let buildErr = buildResult.stderr !== null ? buildResult.stderr.trim() : "npm run build failed"
+    throw `npm publish failed: build before publish failed: ${buildErr}`
+  }
+  let cliBin = `${publishDir}/dist/cli.js`
+  if (!fileExists(cliBin)) {
+    throw "npm publish failed: dist/cli.js missing after build (bin target)"
+  }
+
   // Build the publish command
-  let cmd = "npm publish"
+  let cmd = "npm publish --access public"
 
   // Add dist-tag for channels
   let channel = context.nextRelease.channel
@@ -121,13 +144,18 @@ export fn npmPublish(pluginConfig, context) {
     cmd = cmd + ` --tag ${channel}`
   }
 
-  // Set registry auth via NPM_TOKEN
+  // 2FA / automation: NPM_OTP=123456 npm run release
   let env = context.env
+  let otp = env.NPM_OTP !== null && env.NPM_OTP !== "" ? env.NPM_OTP : env.npm_config_otp
+  if (otp !== null && otp !== "") {
+    cmd = cmd + ` --otp ${otp}`
+  }
+
+  // Set registry auth via NPM_TOKEN
   if (env.NPM_TOKEN !== null && env.NPM_TOKEN !== "") {
     cmd = `NPM_TOKEN=${env.NPM_TOKEN} ${cmd}`
   }
 
-  let publishDir = `${cwd}/${pkgRoot}`
   let result = execCapture(`cd "${publishDir}" && ${cmd}`)
 
   if (result.code !== 0) {

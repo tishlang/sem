@@ -54,14 +54,13 @@ Zero consumer deps — the action ships the JS bundle on the release tag.
   with:
     dry_run: true
     working_directory: .
+    # JSON or YAML — both work
     config: |
-      {
-        "branches": ["main"],
-        "plugins": [
-          "@sem/commit-analyzer",
-          "@sem/release-notes-generator"
-        ]
-      }
+      branches:
+        - main
+      plugins:
+        - "@sem/commit-analyzer"
+        - "@sem/release-notes-generator"
   env:
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -69,15 +68,23 @@ Zero consumer deps — the action ships the JS bundle on the release tag.
   run: echo "Next version ${{ steps.sem.outputs.new_release_version }}"
 ```
 
+JSON still works if you prefer it:
+
+```yaml
+config: |
+  { "branches": ["main"], "plugins": ["@sem/commit-analyzer"] }
+```
+
 ### Action inputs
 
 | Input | Description |
 |-------|-------------|
-| `config` | Full sem JSON config (skips file / package.json config when set) |
+| `config` | Full sem config as **JSON or YAML** (skips file / package.json config when set) |
 | `dry_run` | Preview only |
 | `ci` | Default `true`; set `false` for `--no-ci` |
 | `working_directory` | Package cwd (monorepos) |
-| `branches` | Optional JSON array override |
+| `branches` | Release branches (JSON/YAML array; supports `*` globs) |
+| `ignore_branches` | Soft-skip globs (JSON/YAML array or comma-separated) |
 | `tag_format` | Optional tag format override |
 | `debug` | Verbose logging |
 
@@ -115,18 +122,111 @@ Priority when `config` / `--config-json` / `SEM_CONFIG` is **not** set:
 }
 ```
 
+### Promote-style releases (`@sem/github`)
+
+Same model as the tish repo: merge to `main` drafts a **prerelease** (with assets); promoting the GitHub Release (uncheck “Set as a pre-release”) triggers publish workflows.
+
+```json
+[
+  "@sem/github",
+  {
+    "prerelease": true,
+    "targetCommitish": "main",
+    "assets": [
+      "dist/*.tgz",
+      { "path": "bin/my-tool", "name": "my-tool-linux-x64", "label": "Linux (x64)" }
+    ],
+    "successComment": "Shipped in ${nextRelease.version}: ${releases.url}",
+    "releasedLabels": ["released"],
+    "failTitle": "The automated release is failing 🚨",
+    "failComment": false
+  }
+]
+```
+
+| Option | Purpose |
+|--------|---------|
+| `prerelease` | `true` / `false` / omit (auto from release channel) |
+| `draftRelease` | Create as draft instead of published prerelease |
+| `assets` | Glob or `{path,name,label}` list — uploaded to the release (replaces same name) |
+| `targetCommitish` | Branch or SHA the release points at |
+| `successComment` | Issue/PR comment template, or `false` to disable |
+| `failComment` / `failTitle` | Failure issue body/title, or `false` to disable |
+| `releasedLabels` / `labels` / `assignees` | Labels on success targets / fail issue |
+
+On success, sem comments on commit-referenced issues **and** PRs linked via the commits API. `addChannel` flips `prerelease` when a version is added to the latest channel (programmatic promote).
+
+This repo’s CI dogfoods that path: dry-run → pack tarball → `@sem/github` prerelease + asset → promote → `npm-release.yml`.
+
 ## CLI options
 
 | Flag | Description |
 |------|-------------|
 | `--dry-run` | No publish / tag |
-| `--no-ci` | Allow non-CI |
+| `--no-ci` | Allow non-CI (local runs enable this automatically) |
+| `--force <type\|version>` | Force a release (see below) |
 | `--debug` | Verbose |
 | `--branch <name>` | Branch override |
 | `--cwd <path>` | Working directory |
 | `--config-json <json>` | Inline config |
 | `--github-output` | Write Action outputs to `$GITHUB_OUTPUT` |
 | `--help` / `--version` | Help / version from `package.json` |
+
+## Branches and ignores
+
+Release branches are an allowlist (`branches`). Anything else is a **soft skip** (exit 0, `new_release_published=false`) — same idea as workflow `on.push.branches` filters, so Actions jobs stay green.
+
+```json
+{
+  "branches": ["main", "next"],
+  "ignoreBranches": ["dependabot/**", "renovate/**", "chore/**"]
+}
+```
+
+```bash
+npm run release -- --ignore-branches 'dependabot/**,renovate/**'
+```
+
+```yaml
+- uses: tishlang/sem@v1
+  with:
+    branches: '["main"]'
+    ignore_branches: '["dependabot/**"]'
+```
+
+On a non-release or ignored branch, sem logs a skip and exits 0 (it does **not** fail the job).
+
+## Forcing a release
+
+Like other semver CLIs, you can force a bump when conventional commits would not (or when you need an exact version):
+
+```bash
+# Bump type (ignores commit analyzer)
+npm run release -- --force patch
+npm run release -- --force minor
+npm run release -- --force major
+
+# Exact version
+npm run release -- --force 1.4.0
+
+# Dry-run first
+npm run release:dry -- --force patch
+
+# Env form (useful in CI)
+SEM_FORCE=patch npm run release
+```
+
+GitHub Action:
+
+```yaml
+- uses: tishlang/sem@v1
+  with:
+    force: patch
+```
+
+`--force` skips commit analysis and always produces a release. Prefer conventional commits for day-to-day; use force for recoveries, empty bumps, or intentional version jumps.
+
+If a git tag exists but that version was never published to npm, `npm run release` will republish it automatically (no `--force` needed).
 
 ## Dual-runtime layout
 

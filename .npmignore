@@ -1,0 +1,5 @@
+# Prefer .npmignore over .gitignore for packs so gitignored dist/ still ships.
+node_modules/
+*.tgz
+.DS_Store
+.git/

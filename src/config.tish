@@ -3,11 +3,14 @@
 
 import { createLogger } from "./logger.tish"
 import { readFile, fileExists } from "./host.tish"
+import { parseDocument } from "./utils/yaml.tish"
 
 const log = createLogger("config")
 
 const DEFAULT_CONFIG = {
   branches: ["main", "master"],
+  // Soft-skip when the current branch matches (in addition to non-release branches)
+  ignoreBranches: [],
   plugins: [
     "@sem/commit-analyzer",
     "@sem/release-notes-generator",
@@ -55,13 +58,13 @@ fn tryReadJson(path) {
   return null
 }
 
-fn parseConfigJson(raw, label) {
+fn parseConfigDocument(raw, label) {
   if (raw === null || raw === "") return null
   try {
-    return JSON.parse(raw)
+    return parseDocument(raw, label)
   } catch (e) {
-    log.error(`Invalid JSON in ${label}: ${e}`)
-    throw `Invalid JSON in ${label}`
+    log.error(String(e))
+    throw e
   }
 }
 
@@ -71,22 +74,22 @@ export fn loadConfig(cwd, cliOverrides) {
   let skipFiles = false
 
   if (cliOverrides !== null && cliOverrides.configJson !== null) {
-    let injected = parseConfigJson(cliOverrides.configJson, "--config-json")
+    let injected = parseConfigDocument(cliOverrides.configJson, "--config-json")
     if (injected !== null) {
       config = deepMerge(config, injected)
       configSource = "--config-json"
       skipFiles = true
-      log.info("Loaded config from --config-json")
+      log.info("Loaded config from --config-json (JSON or YAML)")
     }
   }
 
   if (!skipFiles && process.env.SEM_CONFIG !== null && process.env.SEM_CONFIG !== "") {
-    let injected = parseConfigJson(process.env.SEM_CONFIG, "SEM_CONFIG")
+    let injected = parseConfigDocument(process.env.SEM_CONFIG, "SEM_CONFIG")
     if (injected !== null) {
       config = deepMerge(config, injected)
       configSource = "SEM_CONFIG"
       skipFiles = true
-      log.info("Loaded config from SEM_CONFIG")
+      log.info("Loaded config from SEM_CONFIG (JSON or YAML)")
     }
   }
 

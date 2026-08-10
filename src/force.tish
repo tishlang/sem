@@ -1,0 +1,39 @@
+// sem/src/force.tish
+// Parse --force / SEM_FORCE values: patch|minor|major or an exact semver
+
+import { valid as validSemver } from "./semver.tish"
+
+const BUMP_TYPES = ["major", "minor", "patch"]
+
+export fn normalizeForce(raw) {
+  if (raw === null || raw === undefined) return null
+  let s = String(raw).trim()
+  if (s === "") return null
+
+  let lower = s.toLowerCase()
+  let bi = 0
+  while (bi < BUMP_TYPES.length) {
+    if (lower === BUMP_TYPES[bi]) {
+      return { kind: "bump", type: lower, version: null }
+    }
+    bi = bi + 1
+  }
+
+  // Exact version: 1.2.3 or v1.2.3
+  let ver = s
+  if (ver.startsWith("v") || ver.startsWith("V")) {
+    ver = ver.slice(1)
+  }
+  if (validSemver(ver)) {
+    return { kind: "version", type: null, version: ver }
+  }
+
+  return null
+}
+
+export fn describeForce(force) {
+  if (force === null) return ""
+  if (force.kind === "bump") return "bump:" + force.type
+  if (force.kind === "version") return "version:" + force.version
+  return JSON.stringify(force)
+}

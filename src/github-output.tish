@@ -41,6 +41,12 @@ export fn writeGitHubOutputs(result) {
 
   let published = result.success === true && result.released === true
   setOutput("new_release_published", published ? "true" : "false")
+  if (result.skipped === true) {
+    setOutput("skipped", "true")
+    if (result.reason !== null) setOutput("skip_reason", result.reason)
+  } else {
+    setOutput("skipped", "false")
+  }
 
   if (result.lastRelease !== null) {
     let last = result.lastRelease

@@ -103,9 +103,24 @@ export fn getRemoteUrl(cwd) {
   return result.output
 }
 
-// Create a tag
+// Create a tag (idempotent: skip if same SHA; move with -f if tag drifted — CI re-runs)
 export fn tag(tagName, sha, cwd) {
   let ref = sha !== null ? sha : "HEAD"
+  let existing = getSha(tagName, cwd)
+  if (existing !== null) {
+    let target = getSha(ref, cwd)
+    if (target !== null && existing === target) {
+      log.debug(`Tag ${tagName} already exists at ${existing} — skipping`)
+      return true
+    }
+    log.info(`Moving tag ${tagName} from ${existing} → ${target}`)
+    let moved = execGit(`-c tag.gpgsign=false tag -fa ${tagName} -m "${tagName}" ${ref}`, cwd)
+    if (!moved.ok) {
+      log.error(`Failed to move tag ${tagName}: ${moved.error}`)
+      return false
+    }
+    return true
+  }
   // Use -a -m to create annotated tag, and disable gpg signing to work in non-interactive envs
   let result = execGit(`-c tag.gpgsign=false tag -a ${tagName} -m "${tagName}" ${ref}`, cwd)
   if (!result.ok) {
@@ -127,6 +142,18 @@ export fn push(remote, branch, pushTags, cwd) {
   let result = execGit(cmd, cwd)
   if (!result.ok) {
     log.error(`Failed to push: ${result.error}`)
+    return false
+  }
+  return true
+}
+
+// Push a single tag (force so CI re-runs can move tags)
+export fn pushTag(tagName, remote, force, cwd) {
+  let remoteName = remote !== null ? remote : "origin"
+  let forceFlag = force === true ? " --force" : ""
+  let result = execGit("push" + forceFlag + " " + remoteName + " refs/tags/" + tagName, cwd)
+  if (!result.ok) {
+    log.error(`Failed to push tag ${tagName}: ${result.error}`)
     return false
   }
   return true

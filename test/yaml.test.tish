@@ -1,0 +1,83 @@
+// sem/test/yaml.test.tish
+import { parseYaml, parseDocument } from "../src/utils/yaml.tish"
+
+let passed = 0
+let failed = 0
+
+fn assertEq(name, actual, expected) {
+  let a = JSON.stringify(actual)
+  let e = JSON.stringify(expected)
+  if (a === e) {
+    passed = passed + 1
+  } else {
+    failed = failed + 1
+    console.log("FAIL: " + name)
+    console.log("  expected: " + e)
+    console.log("  actual:   " + a)
+  }
+}
+
+console.log("yaml.tish tests")
+console.log("===============")
+
+assertEq("json document", parseDocument('{"branches":["main"]}', "t"), { branches: ["main"] })
+
+assertEq(
+  "yaml map + list",
+  parseYaml(`
+branches:
+  - main
+  - next
+dryRun: true
+`),
+  { branches: ["main", "next"], dryRun: true }
+)
+
+assertEq(
+  "yaml plugins with nested tuple",
+  parseYaml(`
+plugins:
+  - "@sem/commit-analyzer"
+  - - "@sem/github"
+    - prerelease: true
+      assets:
+        - foo.tgz
+`),
+  {
+    plugins: [
+      "@sem/commit-analyzer",
+      ["@sem/github", { prerelease: true, assets: ["foo.tgz"] }]
+    ]
+  }
+)
+
+assertEq(
+  "yaml flow plugin entry",
+  parseYaml(`
+plugins:
+  - ["@sem/npm", {"npmPublish": false}]
+`),
+  { plugins: [["@sem/npm", { npmPublish: false }]] }
+)
+
+assertEq(
+  "yaml branches only list",
+  parseDocument("- main\n- \"release/**\"\n", "branches"),
+  ["main", "release/**"]
+)
+
+assertEq("booleans and null", parseYaml("a: true\nb: false\nc: null\n"), { a: true, b: false, c: null })
+assertEq("numbers", parseYaml("n: 12\nf: 1.5\n"), { n: 12, f: 1.5 })
+
+assertEq(
+  "block scalar",
+  parseYaml("body: |\n  line1\n  line2\n"),
+  { body: "line1\nline2" }
+)
+
+console.log("")
+console.log("========================================")
+console.log("Results: " + String(passed) + " passed, " + String(failed) + " failed")
+if (failed > 0) {
+  process.exit(1)
+}

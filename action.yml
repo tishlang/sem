@@ -1,4 +1,6 @@
-name: sem
+# Marketplace `name` must be globally unique (cannot be bare "sem").
+# Consumers still use: uses: tishlang/sem@v1
+name: tishlang-sem
 description: Run @tishlang/sem (semantic release) with inline config — no consumer node_modules
 author: tishlang
 branding:
@@ -7,7 +9,7 @@ branding:
 
 inputs:
   config:
-    description: Full sem config as JSON (skips .semrc / package.json release config when set)
+    description: Full sem config as JSON or YAML (skips .semrc / package.json release config when set)
     required: false
     default: ""
   dry_run:
@@ -23,7 +25,11 @@ inputs:
     required: false
     default: "."
   branches:
-    description: JSON array of branches (overrides config.branches when set)
+    description: Release branches as JSON or YAML array (overrides config.branches when set)
+    required: false
+    default: ""
+  ignore_branches:
+    description: Soft-skip globs as JSON/YAML array or comma-separated list (e.g. dependabot/**)
     required: false
     default: ""
   tag_format:
@@ -34,10 +40,18 @@ inputs:
     description: Enable debug logging
     required: false
     default: "false"
+  force:
+    description: Force a release — major, minor, patch, or exact semver (e.g. 1.2.3)
+    required: false
+    default: ""
 
 outputs:
   new_release_published:
     description: Whether a new release would be / was published
+  skipped:
+    description: Whether the run soft-skipped (e.g. ignored or non-release branch)
+  skip_reason:
+    description: Why the run was skipped (ignored-branch | non-release-branch)
   new_release_version:
     description: Version of the new release
   new_release_major_version:

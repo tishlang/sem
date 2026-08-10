@@ -1,0 +1,129 @@
+// sem/src/plugins/github/api.tish
+// Shared GitHub REST helpers for @sem/github
+
+import { parseGitUrl } from "../../utils/url.tish"
+import { execCapture } from "../../host.tish"
+
+export const DEFAULT_GITHUB_URL = "https://api.github.com"
+
+export fn getToken(env) {
+  if (env.GITHUB_TOKEN !== null && env.GITHUB_TOKEN !== "") return env.GITHUB_TOKEN
+  if (env.GH_TOKEN !== null && env.GH_TOKEN !== "") return env.GH_TOKEN
+  try {
+    let result = execCapture("gh auth token")
+    if (result.code === 0 && result.stdout !== null) {
+      let t = result.stdout.trim()
+      if (t !== "") return t
+    }
+  } catch (e) {
+    // ignore
+  }
+  return null
+}
+
+export fn getRepoInfo(context) {
+  let repoUrl = context.options.repositoryUrl
+  if (repoUrl === null) return null
+  return parseGitUrl(repoUrl)
+}
+
+export fn resolveApiBase(pluginConfig, env) {
+  if (pluginConfig.githubApiUrl !== null && pluginConfig.githubApiUrl !== "") {
+    return pluginConfig.githubApiUrl
+  }
+  if (env.GITHUB_API_URL !== null && env.GITHUB_API_URL !== "") {
+    return env.GITHUB_API_URL
+  }
+  let base = pluginConfig.githubUrl
+  if (base === null || base === "") base = env.GITHUB_URL
+  if (base === null || base === "") base = env.GH_URL
+  if (base === null || base === "") base = DEFAULT_GITHUB_URL
+  if (base.endsWith("/")) base = base.slice(0, base.length - 1)
+  let prefix = pluginConfig.githubApiPathPrefix
+  if (prefix === null || prefix === "") prefix = env.GITHUB_PREFIX
+  if (prefix === null || prefix === "") prefix = env.GH_PREFIX
+  if (prefix !== null && prefix !== "" && base.indexOf("/api/") === -1) {
+    if (!prefix.startsWith("/")) prefix = "/" + prefix
+    return base + prefix
+  }
+  if (base === "https://github.com") return DEFAULT_GITHUB_URL
+  return base
+}
+
+export fn apiUrl(baseUrl, path) {
+  let base = baseUrl !== null ? baseUrl : DEFAULT_GITHUB_URL
+  if (base.endsWith("/")) base = base.slice(0, base.length - 1)
+  if (!path.startsWith("/")) path = "/" + path
+  return base + path
+}
+
+export fn githubFetch(url, method, token, body) {
+  let headers = {
+    "Accept": "application/vnd.github+json",
+    "User-Agent": "sem-release",
+    "Authorization": "Bearer " + token,
+    "X-GitHub-Api-Version": "2022-11-28"
+  }
+
+  let options = {
+    method: method,
+    headers: headers
+  }
+
+  if (body !== null) {
+    options.body = JSON.stringify(body)
+    headers["Content-Type"] = "application/json"
+  }
+
+  return fetch(url, options)
+}
+
+export fn responseText(response) {
+  try {
+    return response.text()
+  } catch (e) {
+    return ""
+  }
+}
+
+export fn responseJson(response) {
+  try {
+    return response.json()
+  } catch (e) {
+    return null
+  }
+}
+
+// Minimal URI encode (works in both Tish and Node bundles)
+export fn urlEncode(value) {
+  let s = value !== null ? String(value) : ""
+  try {
+    if (typeof encodeURIComponent === "function") {
+      return encodeURIComponent(s)
+    }
+  } catch (e) {
+    // fall through
+  }
+  let out = ""
+  let i = 0
+  while (i < s.length) {
+    let ch = s.charAt(i)
+    let code = s.charCodeAt(i)
+    if (
+      (code >= 48 && code <= 57) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      ch === "-" || ch === "_" || ch === "." || ch === "~"
+    ) {
+      out = out + ch
+    } else if (ch === " ") {
+      out = out + "%20"
+    } else {
+      let hex = code.toString(16).toUpperCase()
+      if (hex.length === 1) hex = "0" + hex
+      out = out + "%" + hex
+    }
+    i = i + 1
+  }
+  return out
+}

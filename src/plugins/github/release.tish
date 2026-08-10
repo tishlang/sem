@@ -1,0 +1,295 @@
+// sem/src/plugins/github/release.tish
+// Create/update GitHub Releases and upload assets (tish promote-style prereleases)
+
+import { fileExists, execCapture } from "../../host.tish"
+import { glob as globFiles } from "../../utils/glob.tish"
+import { render } from "../../utils/template.tish"
+import {
+  apiUrl,
+  githubFetch,
+  responseText,
+  responseJson,
+  resolveApiBase,
+  getToken,
+  getRepoInfo,
+  urlEncode
+} from "./api.tish"
+
+fn normalizeAssets(assets) {
+  let out = []
+  if (assets === null) return out
+  if (!Array.isArray(assets)) {
+    assets = [assets]
+  }
+  let i = 0
+  while (i < assets.length) {
+    let a = assets[i]
+    if (typeof a === "string") {
+      out.push({ path: a, label: null, name: null })
+    } else if (a !== null && a.path !== null) {
+      out.push({
+        path: a.path,
+        label: a.label !== null ? a.label : null,
+        name: a.name !== null ? a.name : null
+      })
+    }
+    i = i + 1
+  }
+  return out
+}
+
+fn expandAssetPaths(asset, cwd) {
+  let pattern = asset.path
+  let files = []
+  if (pattern.indexOf("*") !== -1 || pattern.indexOf("?") !== -1) {
+    files = globFiles(pattern, cwd)
+  } else {
+    let full = cwd + "/" + pattern
+    if (fileExists(full) || fileExists(pattern)) {
+      files = [pattern]
+    }
+  }
+  return files
+}
+
+fn basename(path) {
+  let parts = path.split("/")
+  return parts[parts.length - 1]
+}
+
+fn resolvePrerelease(pluginConfig, context) {
+  // Explicit boolean wins; "channel" (default) follows nextRelease.channel
+  if (pluginConfig.prerelease === true) return true
+  if (pluginConfig.prerelease === false) return false
+  // tish-style: set prerelease: true in config for promote-via-UI pipelines
+  let channel = context.nextRelease !== null ? context.nextRelease.channel : null
+  if (channel !== null && channel !== "" && channel !== "latest") return true
+  return false
+}
+
+export fn createOrUpdateRelease(pluginConfig, context) {
+  let logger = context.logger
+  let env = context.env
+  let token = getToken(env)
+  let repoInfo = getRepoInfo(context)
+  if (token === null || repoInfo === null) return null
+
+  let apiBase = resolveApiBase(pluginConfig, env)
+  let tagName = context.nextRelease.gitTag
+  let version = context.nextRelease.version
+
+  let nameTpl = pluginConfig.releaseNameTemplate !== null
+    ? pluginConfig.releaseNameTemplate
+    : ("v" + "$" + "{nextRelease.version}")
+  let bodyTpl = pluginConfig.releaseBodyTemplate !== null
+    ? pluginConfig.releaseBodyTemplate
+    : ("$" + "{nextRelease.notes}")
+
+  let releaseName = render(nameTpl, {
+    nextRelease: context.nextRelease,
+    lastRelease: context.lastRelease
+  })
+  let body = render(bodyTpl, {
+    nextRelease: context.nextRelease,
+    lastRelease: context.lastRelease
+  })
+  if (body === null) body = ""
+
+  let isPrerelease = resolvePrerelease(pluginConfig, context)
+  let isDraft = pluginConfig.draftRelease === true
+  let target = pluginConfig.targetCommitish !== null
+    ? pluginConfig.targetCommitish
+    : (context.nextRelease.gitHead !== null ? context.nextRelease.gitHead : null)
+
+  if (context.options.dryRun) {
+    logger.info(
+      "[dry-run] Would create GitHub Release " + releaseName +
+        " (prerelease=" + String(isPrerelease) + ", draft=" + String(isDraft) + ")"
+    )
+    return {
+      name: "GitHub Release",
+      url: "https://" + repoInfo.host + "/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/tag/" + tagName,
+      id: null,
+      prerelease: isPrerelease,
+      draft: isDraft
+    }
+  }
+
+  let payload = {
+    tag_name: tagName,
+    name: releaseName,
+    body: body,
+    prerelease: isPrerelease,
+    draft: isDraft
+  }
+  if (target !== null && target !== "") {
+    payload.target_commitish = target
+  }
+
+  let createUrl = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases")
+  let response = githubFetch(createUrl, "POST", token, payload)
+  let status = response.status
+  let release = null
+
+  if (status === 201) {
+    release = responseJson(response)
+    logger.success("Created GitHub Release: " + release.html_url)
+  } else if (status === 422) {
+    // Already exists — fetch and PATCH
+    let getUrl = apiUrl(
+      apiBase,
+      "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/tags/" + tagName
+    )
+    let getResp = githubFetch(getUrl, "GET", token, null)
+    if (getResp.status !== 200) {
+      throw "GitHub release exists but could not be fetched: " + responseText(getResp)
+    }
+    release = responseJson(getResp)
+    let patchUrl = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/" + String(release.id))
+    let patchResp = githubFetch(patchUrl, "PATCH", token, {
+      name: releaseName,
+      body: body,
+      prerelease: isPrerelease,
+      draft: isDraft
+    })
+    if (patchResp.status !== 200) {
+      throw "Failed to update GitHub release: " + responseText(patchResp)
+    }
+    release = responseJson(patchResp)
+    logger.success("Updated GitHub Release: " + release.html_url)
+  } else {
+    throw "Failed to create GitHub release: " + String(status) + " " + responseText(response)
+  }
+
+  // Upload assets
+  let assets = normalizeAssets(pluginConfig.assets)
+  if (assets.length > 0) {
+    uploadAssets(pluginConfig, context, release, assets, token, repoInfo, apiBase)
+  }
+
+  return {
+    name: "GitHub Release",
+    url: release.html_url,
+    id: release.id,
+    prerelease: isPrerelease,
+    draft: isDraft
+  }
+}
+
+fn uploadAssets(pluginConfig, context, release, assets, token, repoInfo, apiBase) {
+  let logger = context.logger
+  let cwd = context.cwd
+  let releaseId = release.id
+
+  // Delete existing assets with same name before re-upload (idempotent promote/rebuild)
+  let listUrl = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/" + String(releaseId) + "/assets")
+  let existing = []
+  let listResp = githubFetch(listUrl, "GET", token, null)
+  if (listResp.status === 200) {
+    let listed = responseJson(listResp)
+    if (Array.isArray(listed)) existing = listed
+  }
+
+  let ai = 0
+  while (ai < assets.length) {
+    let asset = assets[ai]
+    let files = expandAssetPaths(asset, cwd)
+    if (files.length === 0) {
+      logger.warn("Release asset not found: " + asset.path)
+      ai = ai + 1
+      continue
+    }
+
+    let fi = 0
+    while (fi < files.length) {
+      let filePath = files[fi]
+      let name = asset.name !== null ? asset.name : basename(filePath)
+      let label = asset.label !== null ? asset.label : name
+      let abs = filePath
+      if (!fileExists(abs) && fileExists(cwd + "/" + filePath)) {
+        abs = cwd + "/" + filePath
+      }
+      if (!fileExists(abs)) {
+        logger.warn("Skipping missing asset file: " + filePath)
+        fi = fi + 1
+        continue
+      }
+
+      // Remove prior asset with same name
+      let ei = 0
+      while (ei < existing.length) {
+        let ex = existing[ei]
+        if (ex !== null && ex.name === name && ex.id !== null) {
+          let delUrl = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/assets/" + String(ex.id))
+          githubFetch(delUrl, "DELETE", token, null)
+        }
+        ei = ei + 1
+      }
+
+      let uploadHost = "https://uploads.github.com"
+      if (apiBase.indexOf("api.github.com") === -1 && pluginConfig.githubUrl !== null) {
+        // GHE: uploads usually on same host — keep default uploads for github.com
+        uploadHost = "https://uploads.github.com"
+      }
+      let uploadUrl =
+        uploadHost + "/repos/" + repoInfo.owner + "/" + repoInfo.repo +
+        "/releases/" + String(releaseId) + "/assets?name=" + urlEncode(name) +
+        "&label=" + urlEncode(label)
+
+      let cmd =
+        "curl -sS -X POST " +
+        "-H " + JSON.stringify("Authorization: Bearer " + token) + " " +
+        "-H " + JSON.stringify("Accept: application/vnd.github+json") + " " +
+        "-H " + JSON.stringify("Content-Type: application/octet-stream") + " " +
+        "--data-binary @" + JSON.stringify(abs) + " " +
+        JSON.stringify(uploadUrl)
+
+      let up = execCapture(cmd)
+      if (up.code !== 0) {
+        logger.error("Failed to upload asset " + name + ": " + (up.stderr !== null ? up.stderr : up.stdout))
+      } else {
+        logger.success("Uploaded release asset: " + name + (label !== name ? " (" + label + ")" : ""))
+      }
+      fi = fi + 1
+    }
+    ai = ai + 1
+  }
+}
+
+// addChannel — flip prerelease flag when promoting to latest (tish-style promote helper)
+export fn updateReleaseChannel(pluginConfig, context) {
+  let logger = context.logger
+  let env = context.env
+  let token = getToken(env)
+  let repoInfo = getRepoInfo(context)
+  if (token === null || repoInfo === null) return null
+
+  let channel = context.nextRelease.channel
+  let makeLatest = channel === null || channel === "" || channel === "latest"
+  let apiBase = resolveApiBase(pluginConfig, env)
+  let tagName = context.nextRelease.gitTag
+
+  if (context.options.dryRun) {
+    logger.info("[dry-run] Would set GitHub release prerelease=" + String(!makeLatest) + " for " + tagName)
+    return null
+  }
+
+  let getUrl = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/tags/" + tagName)
+  let getResp = githubFetch(getUrl, "GET", token, null)
+  if (getResp.status !== 200) {
+    logger.warn("No GitHub release found for tag " + tagName + " to update channel")
+    return null
+  }
+  let release = responseJson(getResp)
+  let patchUrl = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/" + String(release.id))
+  let patchResp = githubFetch(patchUrl, "PATCH", token, {
+    prerelease: !makeLatest,
+    draft: false
+  })
+  if (patchResp.status === 200) {
+    logger.success("Updated GitHub release channel for " + tagName + " (prerelease=" + String(!makeLatest) + ")")
+  } else {
+    logger.warn("Failed to update release channel: " + responseText(patchResp))
+  }
+  return null
+}
