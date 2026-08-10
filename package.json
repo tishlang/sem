@@ -75,7 +75,7 @@
       [
         "@sem/npm",
         {
-          "npmPublish": false
+          "npmPublish": true
         }
       ],
       "@sem/github",

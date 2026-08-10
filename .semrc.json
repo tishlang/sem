@@ -1,10 +1,17 @@
 {
-  "branches": ["main"],
+  "branches": [
+    "main"
+  ],
   "plugins": [
     "@sem/commit-analyzer",
     "@sem/release-notes-generator",
     "@sem/changelog",
-    ["@sem/npm", { "npmPublish": false }],
+    [
+      "@sem/npm",
+      {
+        "npmPublish": true
+      }
+    ],
     "@sem/github",
     "@sem/git"
   ]

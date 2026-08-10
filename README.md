@@ -8,6 +8,8 @@
 | **Node** | `npx @tishlang/sem` / `node dist/cli.js` (built from `src/main.tish`) |
 | **GitHub Actions** | `uses: tishlang/sem@v1` → `dist/action.js` (built from `src/action.tish`) |
 
+> First npm publish of this package was driven by **sem** itself (`node dist/cli.js` with `@sem/npm` `npmPublish: true`).
+
 ## Features
 
 - Full 9-step plugin pipeline: `verifyConditions` → `analyzeCommits` → … → `fail`
