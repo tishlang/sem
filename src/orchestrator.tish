@@ -88,6 +88,31 @@ fn isIgnoredBranch(config, currentBranch) {
   return false
 }
 
+// Republish only when @sem/npm will actually publish (not private / npmPublish:false / plugin absent)
+fn npmPublishEnabled(plugins, cwd) {
+  if (plugins === null || plugins.plugins === null) return false
+  let i = 0
+  while (i < plugins.plugins.length) {
+    let p = plugins.plugins[i]
+    if (p !== null && p.name === "@sem/npm") {
+      let cfg = p.config !== null ? p.config : {}
+      if (cfg.npmPublish === false) return false
+      let pkgPath = cwd + "/package.json"
+      if (fileExists(pkgPath)) {
+        try {
+          let pkg = JSON.parse(readFile(pkgPath))
+          if (pkg.private === true) return false
+        } catch (e) {
+          // ignore
+        }
+      }
+      return true
+    }
+    i = i + 1
+  }
+  return false
+}
+
 fn determineBranch(config, currentBranch) {
   let branches = config.branches
   if (branches === null || !Array.isArray(branches)) {
@@ -300,7 +325,9 @@ export fn release(config) {
       }
       let lastVer = context.lastRelease !== null ? context.lastRelease.version : null
       let lastTag = context.lastRelease !== null ? context.lastRelease.gitTag : null
+      // Recovery: tag exists but version never made it to npm. Only when npm publish is in play.
       if (
+        npmPublishEnabled(plugins, cwd) &&
         pkgName !== null &&
         lastVer !== null &&
         lastVer !== "0.0.0" &&
