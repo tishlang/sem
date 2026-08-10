@@ -67,7 +67,7 @@ fn resolvePrerelease(pluginConfig, context) {
   return false
 }
 
-export fn createOrUpdateRelease(pluginConfig, context) {
+export async fn createOrUpdateRelease(pluginConfig, context) {
   let logger = context.logger
   let env = context.env
   let token = getToken(env)
@@ -127,7 +127,7 @@ export fn createOrUpdateRelease(pluginConfig, context) {
   }
 
   let createUrl = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases")
-  let response = githubFetch(createUrl, "POST", token, payload)
+  let response = await githubFetch(createUrl, "POST", token, payload)
   let status = response.status
   let release = null
 
@@ -140,13 +140,13 @@ export fn createOrUpdateRelease(pluginConfig, context) {
       apiBase,
       "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/tags/" + tagName
     )
-    let getResp = githubFetch(getUrl, "GET", token, null)
+    let getResp = await githubFetch(getUrl, "GET", token, null)
     if (getResp.status !== 200) {
       throw "GitHub release exists but could not be fetched: " + responseText(getResp)
     }
     release = responseJson(getResp)
     let patchUrl = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/" + String(release.id))
-    let patchResp = githubFetch(patchUrl, "PATCH", token, {
+    let patchResp = await githubFetch(patchUrl, "PATCH", token, {
       name: releaseName,
       body: body,
       prerelease: isPrerelease,
@@ -164,7 +164,7 @@ export fn createOrUpdateRelease(pluginConfig, context) {
   // Upload assets
   let assets = normalizeAssets(pluginConfig.assets)
   if (assets.length > 0) {
-    uploadAssets(pluginConfig, context, release, assets, token, repoInfo, apiBase)
+    await uploadAssets(pluginConfig, context, release, assets, token, repoInfo, apiBase)
   }
 
   return {
@@ -176,7 +176,7 @@ export fn createOrUpdateRelease(pluginConfig, context) {
   }
 }
 
-fn uploadAssets(pluginConfig, context, release, assets, token, repoInfo, apiBase) {
+async fn uploadAssets(pluginConfig, context, release, assets, token, repoInfo, apiBase) {
   let logger = context.logger
   let cwd = context.cwd
   let releaseId = release.id
@@ -184,7 +184,7 @@ fn uploadAssets(pluginConfig, context, release, assets, token, repoInfo, apiBase
   // Delete existing assets with same name before re-upload (idempotent promote/rebuild)
   let listUrl = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/" + String(releaseId) + "/assets")
   let existing = []
-  let listResp = githubFetch(listUrl, "GET", token, null)
+  let listResp = await githubFetch(listUrl, "GET", token, null)
   if (listResp.status === 200) {
     let listed = responseJson(listResp)
     if (Array.isArray(listed)) existing = listed
@@ -221,7 +221,7 @@ fn uploadAssets(pluginConfig, context, release, assets, token, repoInfo, apiBase
         let ex = existing[ei]
         if (ex !== null && ex.name === name && ex.id !== null) {
           let delUrl = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/assets/" + String(ex.id))
-          githubFetch(delUrl, "DELETE", token, null)
+          await githubFetch(delUrl, "DELETE", token, null)
         }
         ei = ei + 1
       }
@@ -257,7 +257,7 @@ fn uploadAssets(pluginConfig, context, release, assets, token, repoInfo, apiBase
 }
 
 // addChannel — flip prerelease flag when promoting to latest (tish-style promote helper)
-export fn updateReleaseChannel(pluginConfig, context) {
+export async fn updateReleaseChannel(pluginConfig, context) {
   let logger = context.logger
   let env = context.env
   let token = getToken(env)
@@ -275,14 +275,14 @@ export fn updateReleaseChannel(pluginConfig, context) {
   }
 
   let getUrl = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/tags/" + tagName)
-  let getResp = githubFetch(getUrl, "GET", token, null)
+  let getResp = await githubFetch(getUrl, "GET", token, null)
   if (getResp.status !== 200) {
     logger.warn("No GitHub release found for tag " + tagName + " to update channel")
     return null
   }
   let release = responseJson(getResp)
   let patchUrl = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/releases/" + String(release.id))
-  let patchResp = githubFetch(patchUrl, "PATCH", token, {
+  let patchResp = await githubFetch(patchUrl, "PATCH", token, {
     prerelease: !makeLatest,
     draft: false
   })

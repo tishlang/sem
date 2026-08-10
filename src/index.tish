@@ -134,7 +134,7 @@ fn resolvePackageRoot() {
   return process.cwd()
 }
 
-export fn runCli(argv) {
+export async fn runCli(argv) {
   let args = parseArgs(argv !== null ? argv : process.argv.slice(2))
 
   if (args.help) {
@@ -197,7 +197,7 @@ export fn runCli(argv) {
     }
   }
 
-  let result = release(config)
+  let result = await release(config)
 
   let wantOutputs = args.githubOutput || (process.env.GITHUB_OUTPUT !== null && process.env.GITHUB_OUTPUT !== "")
   if (wantOutputs) {

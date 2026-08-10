@@ -1,5 +1,6 @@
 // sem/src/plugins/github/api.tish
 // Shared GitHub REST helpers for @sem/github
+// Node's fetch/Response are Promise-based — always await them.
 
 import { parseGitUrl } from "../../utils/url.tish"
 import { execCapture } from "../../host.tish"
@@ -57,7 +58,9 @@ export fn apiUrl(baseUrl, path) {
   return base + path
 }
 
-export fn githubFetch(url, method, token, body) {
+// Await fetch + body. Returns a sync-friendly { status, _text } so callers
+// don't need a second await for .text()/.json() (also Promises in Node).
+export async fn githubFetch(url, method, token, body) {
   let headers = {
     "Accept": "application/vnd.github+json",
     "User-Agent": "sem-release",
@@ -75,20 +78,33 @@ export fn githubFetch(url, method, token, body) {
     headers["Content-Type"] = "application/json"
   }
 
-  return fetch(url, options)
-}
-
-export fn responseText(response) {
+  let response = await fetch(url, options)
+  let status = response !== null && response.status !== null ? response.status : 0
+  let text = ""
   try {
-    return response.text()
+    text = await response.text()
+    if (text === null) text = ""
   } catch (e) {
-    return ""
+    text = ""
+  }
+
+  return {
+    status: status,
+    _text: text
   }
 }
 
+export fn responseText(response) {
+  if (response === null) return ""
+  if (response._text !== null) return String(response._text)
+  return ""
+}
+
 export fn responseJson(response) {
+  let text = responseText(response)
+  if (text === null || text === "") return null
   try {
-    return response.json()
+    return JSON.parse(text)
   } catch (e) {
     return null
   }

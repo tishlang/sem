@@ -87,7 +87,7 @@ try {
   addCommit(tmpDir, "fix: initial fix")
 
   let config1 = loadConfig(tmpDir, { dryRun: true, noCi: true })
-  let result1 = release(config1)
+  let result1 = await release(config1)
 
   assert("release succeeded", result1.success)
   assert("release was made", result1.released)
@@ -102,7 +102,7 @@ try {
   addCommit(tmpDir, "fix: patch fix")
 
   let config2 = loadConfig(tmpDir, { dryRun: true, noCi: true })
-  let result2 = release(config2)
+  let result2 = await release(config2)
 
   assert("patch release succeeded", result2.success)
   assert("patch release was made", result2.released)
@@ -115,7 +115,7 @@ try {
   addCommit(tmpDir, "feat: new feature")
 
   let config3 = loadConfig(tmpDir, { dryRun: true, noCi: true })
-  let result3 = release(config3)
+  let result3 = await release(config3)
 
   assert("minor release succeeded", result3.success)
   assert("minor version is 0.2.0", result3.version === "0.2.0")
@@ -127,7 +127,7 @@ try {
   addCommit(tmpDir, "feat!: breaking change")
 
   let config4 = loadConfig(tmpDir, { dryRun: true, noCi: true })
-  let result4 = release(config4)
+  let result4 = await release(config4)
 
   assert("major release succeeded", result4.success)
   assert("major version is 1.0.0", result4.version === "1.0.0")
@@ -140,7 +140,7 @@ try {
   addCommit(tmpDir, "docs: update readme")
 
   let config5 = loadConfig(tmpDir, { dryRun: true, noCi: true })
-  let result5 = release(config5)
+  let result5 = await release(config5)
 
   assert("no release succeeded", result5.success)
   assert("no release made", result5.released === false)

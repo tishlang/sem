@@ -141,8 +141,8 @@ export fn loadPlugins(pluginConfigs) {
   return { plugins: plugins, byStep: byStep }
 }
 
-// Run all plugins for a given lifecycle step
-export fn runPlugins(step, plugins, context) {
+// Run all plugins for a given lifecycle step (await async plugin hooks)
+export async fn runPlugins(step, plugins, context) {
   let results = []
   let pluginsForStep = plugins.byStep[step]
 
@@ -159,7 +159,7 @@ export fn runPlugins(step, plugins, context) {
     let pluginLogger = createLogger(plugin.name)
 
     try {
-      let result = plugin.module[step](plugin.config, {
+      let result = await plugin.module[step](plugin.config, {
         ...context,
         logger: pluginLogger
       })
@@ -179,7 +179,7 @@ export fn runPlugins(step, plugins, context) {
 }
 
 // Run plugins for analyzeCommits — special case: first non-null result wins
-export fn runAnalyzeCommits(plugins, context) {
+export async fn runAnalyzeCommits(plugins, context) {
   let pluginsForStep = plugins.byStep["analyzeCommits"]
   if (pluginsForStep === null || pluginsForStep.length === 0) {
     return null
@@ -192,7 +192,7 @@ export fn runAnalyzeCommits(plugins, context) {
     let plugin = pluginsForStep[i]
     let pluginLogger = createLogger(plugin.name)
 
-    let result = plugin.module.analyzeCommits(plugin.config, {
+    let result = await plugin.module.analyzeCommits(plugin.config, {
       ...context,
       logger: pluginLogger
     })
@@ -208,7 +208,7 @@ export fn runAnalyzeCommits(plugins, context) {
 }
 
 // Run plugins for generateNotes — special case: concatenate all results
-export fn runGenerateNotes(plugins, context) {
+export async fn runGenerateNotes(plugins, context) {
   let pluginsForStep = plugins.byStep["generateNotes"]
   if (pluginsForStep === null || pluginsForStep.length === 0) {
     return ""
@@ -222,7 +222,7 @@ export fn runGenerateNotes(plugins, context) {
     let plugin = pluginsForStep[i]
     let pluginLogger = createLogger(plugin.name)
 
-    let result = plugin.module.generateNotes(plugin.config, {
+    let result = await plugin.module.generateNotes(plugin.config, {
       ...context,
       logger: pluginLogger
     })

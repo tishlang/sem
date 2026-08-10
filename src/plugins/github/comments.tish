@@ -61,8 +61,7 @@ fn collectIssueNumbers(commits) {
   return issues
 }
 
-// GET /repos/{owner}/{repo}/commits/{sha}/pulls — associate PRs with release commits
-export fn findAssociatedPullRequests(apiBase, token, repoInfo, commits, logger) {
+export async fn findAssociatedPullRequests(apiBase, token, repoInfo, commits, logger) {
   let prs = []
   let seen = {}
   if (commits === null) return prs
@@ -80,8 +79,7 @@ export fn findAssociatedPullRequests(apiBase, token, repoInfo, commits, logger) 
       "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/commits/" + sha + "/pulls"
     )
     try {
-      let response = githubFetch(url, "GET", token, null)
-      // Media type for commit pull association
+      let response = await githubFetch(url, "GET", token, null)
       if (response.status === 200) {
         let list = responseJson(response)
         if (Array.isArray(list)) {
@@ -106,16 +104,16 @@ export fn findAssociatedPullRequests(apiBase, token, repoInfo, commits, logger) 
   return prs
 }
 
-fn postIssueComment(apiBase, token, repoInfo, number, body) {
+async fn postIssueComment(apiBase, token, repoInfo, number, body) {
   let url = apiUrl(
     apiBase,
     "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/issues/" + String(number) + "/comments"
   )
-  let response = githubFetch(url, "POST", token, { body: body })
+  let response = await githubFetch(url, "POST", token, { body: body })
   return response.status === 201
 }
 
-fn addLabels(apiBase, token, repoInfo, number, labels) {
+async fn addLabels(apiBase, token, repoInfo, number, labels) {
   if (labels === null || labels === false || !Array.isArray(labels) || labels.length === 0) {
     return
   }
@@ -123,14 +121,13 @@ fn addLabels(apiBase, token, repoInfo, number, labels) {
     apiBase,
     "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/issues/" + String(number) + "/labels"
   )
-  githubFetch(url, "POST", token, { labels: labels })
+  await githubFetch(url, "POST", token, { labels: labels })
 }
 
-fn commentTargets(pluginConfig, context, apiBase, token, repoInfo, logger) {
+async fn commentTargets(pluginConfig, context, apiBase, token, repoInfo, logger) {
   let targets = []
   let seen = {}
 
-  // Issues referenced in commits
   let issues = collectIssueNumbers(context.commits)
   let ii = 0
   while (ii < issues.length) {
@@ -142,8 +139,7 @@ fn commentTargets(pluginConfig, context, apiBase, token, repoInfo, logger) {
     ii = ii + 1
   }
 
-  // Associated PRs (parity with @semantic-release/github)
-  let prs = findAssociatedPullRequests(apiBase, token, repoInfo, context.commits, logger)
+  let prs = await findAssociatedPullRequests(apiBase, token, repoInfo, context.commits, logger)
   let pi = 0
   while (pi < prs.length) {
     let pr = prs[pi]
@@ -158,7 +154,7 @@ fn commentTargets(pluginConfig, context, apiBase, token, repoInfo, logger) {
   return targets
 }
 
-export fn commentSuccess(pluginConfig, context) {
+export async fn commentSuccess(pluginConfig, context) {
   let logger = context.logger
   let env = context.env
   let token = getToken(env)
@@ -166,7 +162,6 @@ export fn commentSuccess(pluginConfig, context) {
   if (token === null || repoInfo === null) return null
   if (context.options.dryRun) return null
 
-  // successComment: false disables; null → default
   if (pluginConfig.successComment === false) {
     logger.info("successComment disabled — skipping issue/PR comments")
     return null
@@ -179,7 +174,7 @@ export fn commentSuccess(pluginConfig, context) {
       : DEFAULT_SUCCESS_COMMENT
 
   let releaseUrl = releaseUrlFromContext(context)
-  let targets = commentTargets(pluginConfig, context, apiBase, token, repoInfo, logger)
+  let targets = await commentTargets(pluginConfig, context, apiBase, token, repoInfo, logger)
 
   let commented = 0
   let ti = 0
@@ -195,18 +190,17 @@ export fn commentSuccess(pluginConfig, context) {
     })
 
     try {
-      if (postIssueComment(apiBase, token, repoInfo, t.number, body)) {
+      if (await postIssueComment(apiBase, token, repoInfo, t.number, body)) {
         commented = commented + 1
       }
     } catch (e) {
       logger.debug("Failed to comment on " + t.kind + " #" + t.number + ": " + String(e))
     }
 
-    // releasedLabels: false disables; null → no labels (config must opt in)
     let releasedLabels = pluginConfig.releasedLabels
     if (releasedLabels !== false && releasedLabels !== null) {
       try {
-        addLabels(apiBase, token, repoInfo, t.number, releasedLabels)
+        await addLabels(apiBase, token, repoInfo, t.number, releasedLabels)
       } catch (e) {
         logger.debug("Failed to label #" + t.number + ": " + String(e))
       }
@@ -224,20 +218,19 @@ export fn commentSuccess(pluginConfig, context) {
   return null
 }
 
-fn findOpenFailIssue(apiBase, token, repoInfo, failTitle) {
-  // Search open issues with exact title
+async fn findOpenFailIssue(apiBase, token, repoInfo, failTitle) {
   let q =
     "repo:" + repoInfo.owner + "/" + repoInfo.repo +
     " is:issue is:open in:title \"" + failTitle + "\""
   let url = apiUrl(apiBase, "/search/issues?q=" + urlEncode(q) + "&per_page=1")
-  let response = githubFetch(url, "GET", token, null)
+  let response = await githubFetch(url, "GET", token, null)
   if (response.status !== 200) return null
   let data = responseJson(response)
   if (data === null || data.items === null || data.items.length === 0) return null
   return data.items[0]
 }
 
-export fn reportFailure(pluginConfig, context) {
+export async fn reportFailure(pluginConfig, context) {
   let logger = context.logger
   let env = context.env
   let token = getToken(env)
@@ -245,7 +238,6 @@ export fn reportFailure(pluginConfig, context) {
   if (token === null || repoInfo === null) return null
   if (context.options.dryRun) return null
 
-  // failComment: false → don't open/update issues
   if (pluginConfig.failComment === false || pluginConfig.failTitle === false) {
     logger.info("failComment/failTitle disabled — skipping failure issue")
     return null
@@ -274,9 +266,9 @@ export fn reportFailure(pluginConfig, context) {
   })
 
   try {
-    let existing = findOpenFailIssue(apiBase, token, repoInfo, failTitle)
+    let existing = await findOpenFailIssue(apiBase, token, repoInfo, failTitle)
     if (existing !== null && existing.number !== null) {
-      if (postIssueComment(apiBase, token, repoInfo, existing.number, body)) {
+      if (await postIssueComment(apiBase, token, repoInfo, existing.number, body)) {
         logger.warn("Updated failure issue #" + String(existing.number))
       }
       return null
@@ -292,7 +284,7 @@ export fn reportFailure(pluginConfig, context) {
     }
 
     let url = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo + "/issues")
-    let response = githubFetch(url, "POST", token, payload)
+    let response = await githubFetch(url, "POST", token, payload)
     if (response.status === 201) {
       let issueData = responseJson(response)
       logger.warn("Opened failure issue: " + issueData.html_url)

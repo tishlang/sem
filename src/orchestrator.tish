@@ -151,7 +151,7 @@ fn determineBranch(config, currentBranch) {
   return null
 }
 
-export fn release(config) {
+export async fn release(config) {
   let startTime = Date.now()
   let cwd = config.cwd !== null ? config.cwd : process.cwd()
   let env = process.env
@@ -286,7 +286,7 @@ export fn release(config) {
   try {
     // 1. verifyConditions
     log.blank()
-    runPlugins("verifyConditions", plugins, context)
+    await runPlugins("verifyConditions", plugins, context)
 
     // 2. analyzeCommits, --force, or republish last tag if missing from npm
     log.blank()
@@ -313,7 +313,7 @@ export fn release(config) {
     } else if (parsedCommits.length === 0) {
       log.info("No commits since last release")
     } else {
-      releaseType = runAnalyzeCommits(plugins, context)
+      releaseType = await runAnalyzeCommits(plugins, context)
     }
 
     if (releaseType === null) {
@@ -406,11 +406,11 @@ export fn release(config) {
 
       // 3. verifyRelease
       log.blank()
-      runPlugins("verifyRelease", plugins, context)
+      await runPlugins("verifyRelease", plugins, context)
 
       // 4. generateNotes
       log.blank()
-      notes = runGenerateNotes(plugins, context)
+      notes = await runGenerateNotes(plugins, context)
       if ((notes === null || notes === "") && force !== null) {
         notes = "## " + nextVersion + "\n\nForced release (`--force " + (forceExactVersion !== null ? forceExactVersion : releaseType) + "`)."
       }
@@ -418,7 +418,7 @@ export fn release(config) {
 
       // 5. prepare
       log.blank()
-      runPlugins("prepare", plugins, context)
+      await runPlugins("prepare", plugins, context)
 
       // Create git tag (core responsibility, not plugin)
       if (!config.dryRun) {
@@ -444,7 +444,7 @@ export fn release(config) {
 
     // 6. publish
     log.blank()
-    let publishResults = runPlugins("publish", plugins, context)
+    let publishResults = await runPlugins("publish", plugins, context)
     let pi = 0
     while (pi < publishResults.length) {
       if (publishResults[pi] !== null) {
@@ -456,12 +456,12 @@ export fn release(config) {
     // 7. addChannel
     if (channel !== null) {
       log.blank()
-      runPlugins("addChannel", plugins, context)
+      await runPlugins("addChannel", plugins, context)
     }
 
     // 8. success
     log.blank()
-    runPlugins("success", plugins, context)
+    await runPlugins("success", plugins, context)
 
     // Summary
     let elapsed = Date.now() - startTime
@@ -500,7 +500,7 @@ export fn release(config) {
     context.errors.push(String(err))
 
     try {
-      runPlugins("fail", plugins, context)
+      await runPlugins("fail", plugins, context)
     } catch (failErr) {
       log.error(`Fail handler also errored: ${failErr}`)
     }

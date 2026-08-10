@@ -26,7 +26,7 @@ import { createOrUpdateRelease, updateReleaseChannel } from "./release.tish"
 import { commentSuccess, reportFailure } from "./comments.tish"
 
 // verifyConditions — token + repo API access
-export fn githubVerifyConditions(pluginConfig, context) {
+export async fn githubVerifyConditions(pluginConfig, context) {
   let logger = context.logger
   let env = context.env
 
@@ -44,7 +44,7 @@ export fn githubVerifyConditions(pluginConfig, context) {
   let url = apiUrl(apiBase, "/repos/" + repoInfo.owner + "/" + repoInfo.repo)
 
   try {
-    let response = githubFetch(url, "GET", token, null)
+    let response = await githubFetch(url, "GET", token, null)
     if (response.status === 401 || response.status === 403) {
       throw "GitHub token is invalid or lacks required permissions"
     }
@@ -60,21 +60,21 @@ export fn githubVerifyConditions(pluginConfig, context) {
 }
 
 // publish — create/update release + upload assets
-export fn githubPublish(pluginConfig, context) {
-  return createOrUpdateRelease(pluginConfig, context)
+export async fn githubPublish(pluginConfig, context) {
+  return await createOrUpdateRelease(pluginConfig, context)
 }
 
 // addChannel — promote/demote prerelease flag when a version is added to a channel
-export fn githubAddChannel(pluginConfig, context) {
-  return updateReleaseChannel(pluginConfig, context)
+export async fn githubAddChannel(pluginConfig, context) {
+  return await updateReleaseChannel(pluginConfig, context)
 }
 
 // success — comment on associated issues and PRs
-export fn githubSuccess(pluginConfig, context) {
-  return commentSuccess(pluginConfig, context)
+export async fn githubSuccess(pluginConfig, context) {
+  return await commentSuccess(pluginConfig, context)
 }
 
 // fail — open or update a failure issue
-export fn githubFail(pluginConfig, context) {
-  return reportFailure(pluginConfig, context)
+export async fn githubFail(pluginConfig, context) {
+  return await reportFailure(pluginConfig, context)
 }

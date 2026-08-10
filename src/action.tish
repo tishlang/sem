@@ -38,7 +38,7 @@ fn resolvePath(base, rel) {
   return base + "/" + rel
 }
 
-fn runAction() {
+async fn runAction() {
   let workingDirectory = getInput("working_directory", ".")
   if (workingDirectory === null || workingDirectory === "") workingDirectory = "."
   let cwd = resolvePath(process.cwd(), workingDirectory)
@@ -99,7 +99,7 @@ fn runAction() {
     config.force = String(force).trim()
   }
 
-  let result = release(config)
+  let result = await release(config)
   writeGitHubOutputs(result)
 
   if (!result.success) {
@@ -111,4 +111,4 @@ fn runAction() {
   process.exit(0)
 }
 
-runAction()
+await runAction()

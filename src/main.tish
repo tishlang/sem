@@ -3,4 +3,4 @@
 
 import { runCli } from "./index.tish"
 
-runCli(process.argv.slice(2))
+await runCli(process.argv.slice(2))
