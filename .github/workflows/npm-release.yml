@@ -55,7 +55,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
+          # Do NOT set registry-url here — it injects a dummy NODE_AUTH_TOKEN
+          # that breaks npm OIDC trusted publishing (E404 on PUT).
 
       - name: Upgrade npm for OIDC trusted publishing (needs >= 11.5.1)
         run: |
@@ -63,7 +64,17 @@ jobs:
           npm --version
 
       - name: Publish @tishlang/sem to npm
-        run: npm publish tishlang-sem-npm-package.tgz --access public
+        env:
+          # Ensure token auth cannot shadow OIDC (setup-node / secrets leftovers)
+          NODE_AUTH_TOKEN: ""
+          NPM_TOKEN: ""
+        run: |
+          # Prove OIDC is available to the job (trusted publisher on npmjs.com)
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "::error::No GitHub OIDC token endpoint — check permissions.id-token: write"
+            exit 1
+          fi
+          npm publish tishlang-sem-npm-package.tgz --access public --registry https://registry.npmjs.org/
 
       - name: Update release description with npm URL
         env:
