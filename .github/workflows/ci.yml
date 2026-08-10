@@ -119,7 +119,7 @@ jobs:
           BRANCH="release/v${VERSION}"
           git checkout -B "$BRANCH"
           # Ensure action consumers get the JS bundle on this ref
-          git add -f dist/sem.js package.json
+          git add -f dist/sem.js dist/cli.js dist/action.js package.json
           git commit -m "chore(release): v${VERSION} [skip ci]" || true
           git push origin "$BRANCH" --force
           # Rolling major tag for uses: tishlang/sem@v1

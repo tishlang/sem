@@ -63,4 +63,5 @@ outputs:
 
 runs:
   using: node20
-  main: action/main.js
+  # Built from src/action.tish — run `npm run build` before local uses: ./
+  main: dist/action.js

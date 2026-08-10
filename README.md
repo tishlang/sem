@@ -5,8 +5,8 @@
 | Runtime | How |
 |---------|-----|
 | **Tish** | `tish run --feature full src/main.tish` (source via `tish.module`) |
-| **Node** | `npx @tishlang/sem` / `node bin/sem.js` (prebuilt `dist/sem.js`) |
-| **GitHub Actions (semtac)** | `uses: tishlang/sem@v1` — inline config, **no consumer `node_modules`** |
+| **Node** | `npx @tishlang/sem` / `node dist/cli.js` (built from `src/main.tish`) |
+| **GitHub Actions (semtac)** | `uses: tishlang/sem@v1` → `dist/action.js` (built from `src/action.tish`) |
 
 ## Features
 
@@ -126,18 +126,25 @@ Priority when `config` / `--config-json` / `SEM_CONFIG` is **not** set:
 
 ## Dual-runtime layout
 
+All source is Tish. JS under `dist/` is **only** produced by `tish build` (never hand-authored).
+
 ```
 sem/
 ├── src/                 # Tish source (also published)
-├── dist/sem.js          # Node / Action bundle (built via tish build --target js)
-├── bin/sem.js           # Node CLI wrapper
-├── action.yml           # semtac
-├── action/main.js
+│   ├── index.tish       # library API
+│   ├── main.tish        # CLI entry
+│   └── action.tish      # semtac Action entry
+├── dist/                # gitignored locally; built by npm run build
+│   ├── sem.js           # library
+│   ├── cli.js           # Node bin
+│   └── action.js        # action.yml main
+├── action.yml           # semtac metadata
+├── scripts/build.sh     # tish build → dist/
 └── docs/TISH_SEMTAC_MIGRATION.md
 ```
 
 ```bash
-npm run build    # tish build src/index.tish -o dist/sem.js --target js
+npm run build    # tish build → dist/{sem,cli,action}.js
 ```
 
 ## Development

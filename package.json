@@ -25,28 +25,27 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "sem": "./bin/sem.js"
+    "sem": "./dist/cli.js"
   },
   "files": [
     "src/",
     "dist/",
-    "bin/",
-    "action/",
     "action.yml",
     "README.md",
     "LICENSE",
-    "docs/"
+    "docs/",
+    "scripts/build.sh"
   ],
   "scripts": {
     "start": "tish run --feature full src/main.tish",
     "release": "tish run --feature full src/main.tish",
     "release:dry": "tish run --feature full src/main.tish --dry-run --no-ci",
-    "build": "mkdir -p dist && tish build src/index.tish -o dist/sem.js --target js",
+    "build": "bash scripts/build.sh",
     "prepack": "npm run build",
     "prepublishOnly": "npm run build",
     "test": "tish run --feature fs,process,regex test/semver.test.tish && tish run --feature fs,process,regex test/commit-parser.test.tish && tish run --feature fs,process,regex test/commit-analyzer.test.tish && tish run --feature fs,process,regex test/release-notes.test.tish",
     "test:integration": "tish run --feature full test/integration.test.tish",
-    "test:node": "npm run build && node bin/sem.js --help && node bin/sem.js --version",
+    "test:node": "npm run build && node dist/cli.js --help && node dist/cli.js --version",
     "test:all": "npm test && npm run test:integration && npm run test:node"
   },
   "keywords": [

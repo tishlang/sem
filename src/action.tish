@@ -1,0 +1,94 @@
+// sem/src/action.tish
+// semtac GitHub Action entry — compiled to dist/action.js via tish build
+
+import { loadConfig } from "./config.tish"
+import { release } from "./orchestrator.tish"
+import { writeGitHubOutputs } from "./github-output.tish"
+
+fn getInput(name, fallback) {
+  let key = "INPUT_" + name.toUpperCase()
+  let v = process.env[key]
+  if (v === null || v === undefined) return fallback
+  return v
+}
+
+fn asBool(value, defaultValue) {
+  if (value === null || value === undefined || value === "") return defaultValue
+  let s = String(value).trim().toLowerCase()
+  return s === "true" || s === "1" || s === "yes" || s === "y" || s === "on"
+}
+
+fn parseJson(raw, label) {
+  if (raw === null || raw === undefined || String(raw).trim() === "") return null
+  try {
+    return JSON.parse(raw)
+  } catch (e) {
+    throw "Invalid JSON for " + label + ": " + String(e)
+  }
+}
+
+fn resolvePath(base, rel) {
+  let pathMod = null
+  if (typeof process.getBuiltinModule === "function") {
+    pathMod = process.getBuiltinModule("path")
+  }
+  if (pathMod !== null) {
+    return pathMod.resolve(base, rel)
+  }
+  // Tish fallback — simple join when already absolute-ish
+  if (rel === "." || rel === "") return base
+  if (rel.startsWith("/")) return rel
+  return base + "/" + rel
+}
+
+fn runAction() {
+  let workingDirectory = getInput("working_directory", ".")
+  if (workingDirectory === null || workingDirectory === "") workingDirectory = "."
+  let cwd = resolvePath(process.cwd(), workingDirectory)
+
+  let dryRun = asBool(getInput("dry_run", "false"), false)
+  let ci = asBool(getInput("ci", "true"), true)
+  let debug = asBool(getInput("debug", "false"), false)
+
+  let configRaw = getInput("config", "")
+  let branchesRaw = getInput("branches", "")
+  let tagFormat = getInput("tag_format", "")
+
+  let cliOverrides = {
+    dryRun: dryRun,
+    noCi: !ci,
+    debug: debug
+  }
+
+  if (configRaw !== null && String(configRaw).trim() !== "") {
+    cliOverrides.configJson = configRaw
+  }
+
+  let config = loadConfig(cwd, cliOverrides)
+
+  let branches = parseJson(branchesRaw, "branches")
+  if (branches !== null) {
+    config.branches = branches
+  }
+  if (tagFormat !== null && String(tagFormat).trim() !== "") {
+    config.tagFormat = tagFormat
+  }
+
+  config.cwd = cwd
+  config.dryRun = dryRun
+  if (!ci) config.noCi = true
+  if (debug) config.debug = true
+
+  let result = release(config)
+  writeGitHubOutputs(result)
+
+  if (!result.success) {
+    console.error("semtac failed: " + result.error)
+    process.exit(1)
+  }
+
+  // Soft success when no bump
+  process.exit(0)
+}
+
+runAction()

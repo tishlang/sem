@@ -91,6 +91,31 @@ Configuration (when --config-json / SEM_CONFIG not set):
   4. Built-in defaults
 `
 
+fn resolvePackageRoot() {
+  if (process.env.SEM_PACKAGE_ROOT !== null && process.env.SEM_PACKAGE_ROOT !== "") {
+    return process.env.SEM_PACKAGE_ROOT
+  }
+
+  // When running the Node CLI (`node dist/cli.js`), resolve package root from argv[1]
+  if (typeof process.getBuiltinModule === "function" && process.argv.length > 1) {
+    let pathMod = process.getBuiltinModule("path")
+    let fs = process.getBuiltinModule("fs")
+    if (pathMod !== null && fs !== null) {
+      let script = pathMod.resolve(process.argv[1])
+      let dir = pathMod.dirname(script)
+      let candidate = pathMod.resolve(dir, "..")
+      if (fs.existsSync(pathMod.join(candidate, "package.json"))) {
+        return candidate
+      }
+      if (fs.existsSync(pathMod.join(dir, "package.json"))) {
+        return dir
+      }
+    }
+  }
+
+  return process.cwd()
+}
+
 export fn runCli(argv) {
   let args = parseArgs(argv !== null ? argv : process.argv.slice(2))
 
@@ -100,9 +125,7 @@ export fn runCli(argv) {
     return { success: true, released: false }
   }
 
-  let pkgCwd = process.env.SEM_PACKAGE_ROOT !== null && process.env.SEM_PACKAGE_ROOT !== ""
-    ? process.env.SEM_PACKAGE_ROOT
-    : process.cwd()
+  let pkgCwd = resolvePackageRoot()
   let version = process.env.SEM_PACKAGE_VERSION !== null && process.env.SEM_PACKAGE_VERSION !== ""
     ? process.env.SEM_PACKAGE_VERSION
     : getPackageVersion(pkgCwd)
