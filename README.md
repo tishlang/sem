@@ -14,35 +14,58 @@
 
 - Full 9-step plugin pipeline: `verifyConditions` → `analyzeCommits` → … → `fail`
 - Built-in plugins: `@sem/commit-analyzer`, `@sem/release-notes-generator`, `@sem/changelog`, `@sem/npm`, `@sem/github`, `@sem/git`
-- Conventional Commits + semver
-- Config via file, `package.json`, env `SEM_CONFIG`, or `--config-json` / Action `config` input
+- Conventional Commits + semver (`feat` / `fix` / `perf` / breaking → bump; `chore` / `docs` / `ci` → no release)
+- Config via file, `package.json`, `SEM_CONFIG`, `--config-json`, or Action `config` (**JSON or YAML**)
+- Soft-skip on non-release / ignored branches (exit 0 — CI stays green)
+- `--force` / `SEM_FORCE` for recoveries; auto-republish when a git tag exists but the version is missing from npm
+- Promote-style GitHub releases (prerelease + assets → uncheck prerelease → publish workflows)
 
 ## Install
 
 ```bash
+# As a CLI / library in your repo
 npm install -D @tishlang/sem
+
+# Or from GitHub Packages
+npm install -D @tishlang/sem --registry=https://npm.pkg.github.com
 ```
 
-First publish is `npm run release` (requires npm login).
-
 Requires Node ≥ 22 for the JS CLI. For Tish-native runs, install a `tish` CLI (`@tishlang/tish` or cargo build).
+
+**GitHub Action** needs no install — pin the tag:
+
+```yaml
+uses: tishlang/sem@v1   # Marketplace listing name is tishlang-sem; uses path is the repo
+```
 
 ## Quick start
 
 ```bash
-# Node
-npx sem --dry-run --no-ci
+# Preview (local; --no-ci is auto-enabled outside CI)
+npx sem --dry-run
+# or: npm run release:dry
 
-# Tish
-tish run --feature full src/main.tish --dry-run --no-ci
+# Real release (needs git remotes + auth — see Auth below)
+npx sem
+# or: npm run release / npm start
 
-# Inline config (skip .semrc)
-npx sem --dry-run --no-ci --config-json '{"branches":["main"],"plugins":["@sem/commit-analyzer","@sem/release-notes-generator"]}'
+# Tish runtime
+tish run --feature full src/main.tish --dry-run
+
+# Inline config (JSON or YAML; skips .semrc)
+npx sem --dry-run --config-json '{"branches":["main"],"plugins":["@sem/commit-analyzer","@sem/release-notes-generator"]}'
+npx sem --dry-run --config-json $'branches:\n  - main\nplugins:\n  - "@sem/commit-analyzer"'
 ```
 
 ## GitHub Action
 
-Zero consumer deps — the action ships the JS bundle on the release tag.
+Zero consumer deps — the action ships the JS bundle on the release tag (`dist/` is committed to release tags / `v1`).
+
+**CI tips**
+
+- `actions/checkout` with `fetch-depth: 0` (full history + tags for the version oracle)
+- Job permissions: at least `contents: read` for dry-run; `contents: write` to create tags/releases; `pull-requests: write` / `issues: write` if you enable success/fail comments
+- Set `GITHUB_TOKEN` (or rely on the default token with those permissions)
 
 ```yaml
 - uses: actions/checkout@v7
@@ -75,24 +98,74 @@ config: |
   { "branches": ["main"], "plugins": ["@sem/commit-analyzer"] }
 ```
 
+Version-oracle + promote pattern (what this repo dogfoods):
+
+```yaml
+# 1) Dry-run for the next version
+- uses: tishlang/sem@v1
+  id: sem
+  with:
+    dry_run: true
+    config: |
+      branches: [main]
+      plugins:
+        - "@sem/commit-analyzer"
+        - "@sem/release-notes-generator"
+
+# 2) Build/pack assets, then force that version with @sem/github prerelease:true
+# 3) Human unchecks "Set as a pre-release" → a workflow on release: [published, edited]
+#    with if: draft == false && prerelease == false publishes to npm / GitHub Packages
+```
+
 ### Action inputs
 
-| Input | Description |
-|-------|-------------|
-| `config` | Full sem config as **JSON or YAML** (skips file / package.json config when set) |
-| `dry_run` | Preview only |
-| `ci` | Default `true`; set `false` for `--no-ci` |
-| `working_directory` | Package cwd (monorepos) |
-| `branches` | Release branches (JSON/YAML array; supports `*` globs) |
-| `ignore_branches` | Soft-skip globs (JSON/YAML array or comma-separated) |
-| `tag_format` | Optional tag format override |
-| `debug` | Verbose logging |
+| Input | Default | Description |
+|-------|---------|-------------|
+| `config` | _(empty)_ | Full sem config as **JSON or YAML** (skips file / package.json config when set) |
+| `dry_run` | `false` | Preview only — no tag / publish |
+| `ci` | `true` | Set `false` for `--no-ci` |
+| `working_directory` | `.` | Package cwd (monorepo package root) |
+| `branches` | _(from config)_ | Release branches (JSON/YAML array; supports `*` globs); overrides `config.branches` |
+| `ignore_branches` | _(from config)_ | Soft-skip globs (JSON/YAML array or comma-separated) |
+| `tag_format` | `v${version}` | Tag format override |
+| `force` | _(empty)_ | Force a release: `major` / `minor` / `patch` / exact `x.y.z` |
+| `debug` | `false` | Verbose logging |
 
 ### Action outputs
 
-Compatible with `cycjimmy/semantic-release-action`: `new_release_published`, `new_release_version`, major/minor/patch, `new_release_notes`, `new_release_git_tag` / `git_head`, `last_release_*`.
+Same shape as `cycjimmy/semantic-release-action`, plus soft-skip fields. Use `id:` on the step, then `steps.<id>.outputs.*` to post, notify, or kick other jobs.
 
-No bump → `new_release_published=false`, exit 0.
+| Output | When set | Description |
+|--------|----------|-------------|
+| `new_release_published` | Always | `"true"` if a release was (or would be, in dry-run) published; else `"false"` |
+| `skipped` | Always | `"true"` if the run soft-skipped (non-release / ignored branch) |
+| `skip_reason` | When skipped | `ignored-branch` or `non-release-branch` |
+| `new_release_version` | On publish / dry-run bump | Full version, e.g. `1.4.0` |
+| `new_release_major_version` | On publish / dry-run bump | Major segment |
+| `new_release_minor_version` | On publish / dry-run bump | Minor segment |
+| `new_release_patch_version` | On publish / dry-run bump | Patch segment |
+| `new_release_channel` | When non-latest | Dist-tag / channel name |
+| `new_release_notes` | On publish / dry-run bump | Changelog body (multiline-safe) |
+| `new_release_git_head` | On publish / dry-run bump | Commit SHA for the release |
+| `new_release_git_tag` | On publish / dry-run bump | Tag, e.g. `v1.4.0` |
+| `last_release_version` | When a prior release exists | Previous version |
+| `last_release_git_head` | When a prior release exists | Previous release SHA |
+| `last_release_git_tag` | When a prior release exists | Previous tag |
+
+No bump → `new_release_published=false`, exit 0 (job stays green). Soft-skip on a non-release branch → `skipped=true` with the same exit 0.
+
+```yaml
+- uses: tishlang/sem@v1
+  id: sem
+  # ...
+
+- if: steps.sem.outputs.new_release_published == 'true'
+  run: |
+    gh workflow run deploy.yml -f version="${{ steps.sem.outputs.new_release_version }}"
+    # or post notes: steps.sem.outputs.new_release_notes
+```
+
+CLI equivalent: `--github-output` writes the same keys to `$GITHUB_OUTPUT`.
 
 ## Configuration
 
@@ -162,15 +235,54 @@ This repo’s CI dogfoods that path: dry-run → pack tarball → `@sem/github` 
 
 | Flag | Description |
 |------|-------------|
-| `--dry-run` | No publish / tag |
-| `--no-ci` | Allow non-CI (local runs enable this automatically) |
-| `--force <type\|version>` | Force a release (see below) |
-| `--debug` | Verbose |
-| `--branch <name>` | Branch override |
-| `--cwd <path>` | Working directory |
-| `--config-json <json>` | Inline config |
-| `--github-output` | Write Action outputs to `$GITHUB_OUTPUT` |
-| `--help` / `--version` | Help / version from `package.json` |
+| `--dry-run` / `-d` | No publish / tag |
+| `--no-ci` | Skip CI env check (auto outside CI) |
+| `--force <type\|version>` / `-f` | Force release: `major`\|`minor`\|`patch` or exact `x.y.z` (`--force=patch` also works) |
+| `--ignore-branches <list>` | Comma-separated branch globs to soft-skip |
+| `--branch <name>` / `-b` | Ensure this branch is treated as a release branch |
+| `--cwd <path>` | Working directory (monorepo package root) |
+| `--config-json <doc>` | Inline config **JSON or YAML** (skips file / package.json config) |
+| `--github-output` | Write Action-compatible keys to `$GITHUB_OUTPUT` |
+| `--debug` | Verbose logging |
+| `--help` / `-h` | Help |
+| `--version` / `-v` | Version from `package.json` |
+
+### Environment
+
+| Variable | Description |
+|----------|-------------|
+| `SEM_CONFIG` | Inline config JSON or YAML (same as `--config-json`) |
+| `SEM_FORCE` | Same as `--force` |
+| `GITHUB_OUTPUT` | Path for outputs (set automatically in Actions; enable with `--github-output` locally) |
+| `GITHUB_TOKEN` / `GH_TOKEN` | GitHub API auth for `@sem/github` (falls back to `gh auth token`) |
+| `NPM_TOKEN` | npm auth for `@sem/npm` when not using `npm login` / OIDC |
+| `NPM_OTP` | One-time password for npm 2FA publish |
+| `SEM_PACKAGE_ROOT` | Override package root used for version lookup (advanced) |
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success, no bump, or soft-skip (`skipped` / `new_release_published=false`) |
+| `1` | Hard failure (auth, plugin error, invalid `--force`, etc.) |
+
+### Conventional Commits → bump
+
+| Commit | Release |
+|--------|---------|
+| `feat:` | minor |
+| `fix:` / `perf:` | patch |
+| `feat!:` / `fix!:` / `BREAKING CHANGE:` footer | major |
+| `chore:` / `docs:` / `ci:` / `style:` / … | none (soft no-op) |
+
+## Auth
+
+| Target | How |
+|--------|-----|
+| GitHub Releases / comments | `GITHUB_TOKEN` or `GH_TOKEN`, or authenticated `gh` CLI |
+| npmjs (`@sem/npm`) | `npm login`, `NPM_TOKEN`, or OIDC trusted publishing in CI (`id-token: write`) |
+| npm 2FA | `NPM_OTP` |
+| GitHub Packages | `NODE_AUTH_TOKEN=${{ secrets.GITHUB_TOKEN }}` + `@scope:registry=https://npm.pkg.github.com` |
 
 ## Branches and ignores
 
@@ -226,7 +338,16 @@ GitHub Action:
 
 `--force` skips commit analysis and always produces a release. Prefer conventional commits for day-to-day; use force for recoveries, empty bumps, or intentional version jumps.
 
-If a git tag exists but that version was never published to npm, `npm run release` will republish it automatically (no `--force` needed).
+### Republish (tag without npm)
+
+If a git tag exists but that version was never published to npm, and `@sem/npm` is enabled with publish on (package not `private`), `npm run release` will republish that version automatically (no `--force` needed). Skipped when npm publish is disabled or the package is private.
+
+### Useful `@sem/npm` options
+
+| Option | Description |
+|--------|-------------|
+| `npmPublish` | `false` to bump `package.json` only (no registry publish) |
+| `pkgRoot` | Subdirectory containing `package.json` |
 
 ## Dual-runtime layout
 
@@ -243,8 +364,7 @@ sem/
 │   ├── cli.js           # Node bin
 │   └── action.js        # action.yml main
 ├── action.yml           # Action metadata
-├── scripts/build.sh     # tish build → dist/
-└── docs/TISH_SEM_MIGRATION.md
+└── scripts/build.sh     # tish build → dist/
 ```
 
 ```bash

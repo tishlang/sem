@@ -1,1 +1,4 @@
-# Placeholder — see README and docs/TISH_SEM_MIGRATION.md
+# Placeholder — see README.
+
+Tish CI cutover from cycjimmy → `tishlang/sem` is tracked in
+https://github.com/tishlang/tish/issues/652

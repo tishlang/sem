@@ -33,7 +33,6 @@
     "action.yml",
     "README.md",
     "LICENSE",
-    "docs/",
     "scripts/build.sh"
   ],
   "scripts": {
