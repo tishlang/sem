@@ -1,0 +1,216 @@
+// sem/src/plugins/cargo/index.tish
+// Publishes Rust crates to crates.io, the cargo counterpart of @sem/npm.
+//
+// Rust workspaces publish differently enough from npm that this cannot be a flag on the npm plugin:
+// a release is several crates, they must go up in dependency order because crates.io rejects a
+// crate whose dependencies are not yet on the registry, and the registry rate-limits new crates
+// hard enough that a multi-crate release routinely hits it mid-run.
+//
+// So: `crates` is an ORDERED list, every crate is checked against the registry before it is pushed
+// (making a re-run resume rather than restart), and a 429 is waited out rather than failed on.
+
+import { readFile, writeFile, fileExists, execCapture } from "../../host.tish"
+
+// The registry's own answer to "is this already up?". A 200 means published; anything else, no.
+// Used to skip rather than fail, so a run interrupted halfway resumes where it stopped.
+export fn cargoHasVersion(crate, version) {
+  if (crate === null || version === null || version === "") return false
+  let url = `https://crates.io/api/v1/crates/${crate}/${version}`
+  // crates.io rejects requests without a User-Agent, and answers the error rather than the question.
+  let result = execCapture(`curl -sS -o /dev/null -w '%{http_code}' -A "sem (https://github.com/tishlang/sem)" ${JSON.stringify(url)}`)
+  if (result.code !== 0) return false
+  let code = result.stdout !== null ? result.stdout.trim() : ""
+  return code === "200"
+}
+
+// Where a crate's Cargo.toml lives. Crates are addressed by PACKAGE name, which is not always the
+// directory name, so the manifest is read rather than the path assumed.
+fn crateDir(cwd, cratesDir, want) {
+  let result = execCapture(`ls -1 ${JSON.stringify(`${cwd}/${cratesDir}`)}`)
+  if (result.code !== 0) return null
+  let entries = result.stdout.trim().split("\n")
+  let i = 0
+  while (i < entries.length) {
+    let name = entries[i].trim()
+    i = i + 1
+    if (name === "") continue
+    let manifest = `${cwd}/${cratesDir}/${name}/Cargo.toml`
+    if (!fileExists(manifest)) continue
+    if (cargoPackageName(readFile(manifest)) === want) return `${cwd}/${cratesDir}/${name}`
+  }
+  return null
+}
+
+// `name = "..."` from the [package] table. Deliberately the FIRST one: a manifest's [package]
+// precedes its [dependencies], whose entries also carry names.
+export fn cargoPackageName(manifest) {
+  let lines = manifest.split("\n")
+  let i = 0
+  while (i < lines.length) {
+    let trimmed = lines[i].trim()
+    i = i + 1
+    if (trimmed.startsWith("name") && trimmed.includes("=")) {
+      let parts = trimmed.split("\"")
+      if (parts.length > 1) return parts[1]
+    }
+  }
+  return null
+}
+
+// Rewrite `version = "x.y.z"` in [package] only — the first one, for the same reason as the name.
+// A dependency's version requirement must survive untouched.
+export fn stampCargoVersion(manifest, version) {
+  let lines = manifest.split("\n")
+  let out = []
+  let done = false
+  let i = 0
+  while (i < lines.length) {
+    let line = lines[i]
+    i = i + 1
+    if (!done && line.trim().startsWith("version") && line.includes("=")) {
+      out.push(`version = "${version}"`)
+      done = true
+    } else {
+      out.push(line)
+    }
+  }
+  return out.join("\n")
+}
+
+// verifyConditions — a token, and every crate in `crates` actually exists.
+export fn cargoVerifyConditions(pluginConfig, context) {
+  let logger = context.logger
+  let env = context.env
+
+  let cargoPublish = pluginConfig.cargoPublish !== null ? pluginConfig.cargoPublish : true
+  if (!cargoPublish) {
+    logger.info("cargo publish is disabled")
+    return null
+  }
+
+  let token = env.CARGO_REGISTRY_TOKEN
+  if (token === null || token === "") {
+    throw "cargo authentication failed. Set CARGO_REGISTRY_TOKEN."
+  }
+  logger.info("CARGO_REGISTRY_TOKEN is set")
+
+  let crates = pluginConfig.crates
+  if (crates === null || crates.length === 0) {
+    throw "@sem/cargo needs a `crates` list, in dependency order — dependencies before dependents."
+  }
+
+  // Fail here rather than mid-publish. A crate named in config but absent from disk otherwise
+  // surfaces as a confusing "no matching package" error on whichever crate depends on it.
+  let cratesDir = pluginConfig.cratesDir !== null ? pluginConfig.cratesDir : "crates"
+  let c = 0
+  while (c < crates.length) {
+    let crate = crates[c]
+    c = c + 1
+    if (crateDir(context.cwd, cratesDir, crate) === null) {
+      throw `@sem/cargo: no directory under ${cratesDir}/ defines package '${crate}'`
+    }
+  }
+  logger.info(`${crates.length} crate(s) to publish`)
+
+  return null
+}
+
+// prepare — stamp the release version into every crate's Cargo.toml.
+export fn cargoPrepare(pluginConfig, context) {
+  let logger = context.logger
+  let version = context.nextRelease.version
+  let cratesDir = pluginConfig.cratesDir !== null ? pluginConfig.cratesDir : "crates"
+  let crates = pluginConfig.crates !== null ? pluginConfig.crates : []
+
+  let c = 0
+  while (c < crates.length) {
+    let crate = crates[c]
+    c = c + 1
+    let dir = crateDir(context.cwd, cratesDir, crate)
+    if (dir === null) continue
+    let manifest = `${dir}/Cargo.toml`
+    writeFile(manifest, stampCargoVersion(readFile(manifest), version))
+    logger.success(`Stamped ${crate} to ${version}`)
+  }
+
+  return null
+}
+
+// publish — each crate in order, skipping what is already up, waiting out rate limits.
+export fn cargoPublish(pluginConfig, context) {
+  let logger = context.logger
+  let version = context.nextRelease.version
+  let cratesDir = pluginConfig.cratesDir !== null ? pluginConfig.cratesDir : "crates"
+  let crates = pluginConfig.crates !== null ? pluginConfig.crates : []
+  let cargoPublish = pluginConfig.cargoPublish !== null ? pluginConfig.cargoPublish : true
+
+  if (!cargoPublish) {
+    logger.info("cargo publish is disabled via config")
+    return null
+  }
+
+  if (context.options.dryRun) {
+    let d = 0
+    while (d < crates.length) {
+      logger.info(`[dry-run] Would publish ${crates[d]}@${version}`)
+      d = d + 1
+    }
+    return {
+      name: "crates.io",
+      url: `https://crates.io/crates/${crates[0]}/${version}`
+    }
+  }
+
+  let token = context.env.CARGO_REGISTRY_TOKEN
+  let maxAttempts = pluginConfig.maxAttempts !== null ? pluginConfig.maxAttempts : 6
+  // --no-verify: the crate was already built and tested by the run that produced this release, and
+  // a verify build here would cross-compile targets this host may not have.
+  let flags = pluginConfig.publishFlags !== null ? pluginConfig.publishFlags : "--no-verify --allow-dirty"
+
+  let c = 0
+  while (c < crates.length) {
+    let crate = crates[c]
+    c = c + 1
+    if (cargoHasVersion(crate, version)) {
+      logger.info(`Skipping ${crate} v${version} (already published)`)
+      continue
+    }
+
+    let dir = crateDir(context.cwd, cratesDir, crate)
+    if (dir === null) throw `@sem/cargo: no directory under ${cratesDir}/ defines package '${crate}'`
+
+    // Publish from INSIDE the crate directory. A crate excluded from the workspace — normal for
+    // anything cross-compiled — is invisible to `cargo publish -p` at the root.
+    let published = false
+    let attempt = 1
+    while (attempt <= maxAttempts) {
+      let result = execCapture(`cd ${JSON.stringify(dir)} && cargo publish --token ${JSON.stringify(token)} ${flags} 2>&1`)
+      if (result.code === 0) {
+        logger.success(`Published ${crate}@${version} to crates.io`)
+        published = true
+        break
+      }
+
+      let out = result.stdout !== null ? result.stdout : ""
+      let rateLimited = out.includes("429") || out.toLowerCase().includes("rate limit") || out.toLowerCase().includes("too many")
+      if (!rateLimited) {
+        throw `cargo publish ${crate} failed: ${out.trim()}`
+      }
+
+      // Only a rate limit gets a retry. Anything else is a real failure and fails fast.
+      let wait = pluginConfig.rateLimitWait !== null ? pluginConfig.rateLimitWait : 60
+      logger.warn(`${crate} hit a crates.io rate limit (attempt ${attempt}/${maxAttempts}); waiting ${wait}s`)
+      execCapture(`sleep ${wait}`)
+      attempt = attempt + 1
+    }
+
+    if (!published) {
+      throw `${crate} still rate-limited after ${maxAttempts} attempts. Re-run to resume — already-published crates are skipped.`
+    }
+  }
+
+  return {
+    name: "crates.io",
+    url: `https://crates.io/crates/${crates[0]}/${version}`
+  }
+}

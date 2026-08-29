@@ -1,0 +1,51 @@
+// sem/test/cargo.test.tish
+// Unit tests for the cargo plugin's manifest handling
+
+import { cargoPackageName, stampCargoVersion } from "../src/plugins/cargo/index.tish"
+
+let passed = 0
+let failed = 0
+
+fn assert(name, actual, expected) {
+  if (JSON.stringify(actual) === JSON.stringify(expected)) {
+    passed = passed + 1
+  } else {
+    failed = failed + 1
+    console.log(`  ✖ ${name}`)
+    console.log(`    expected: ${JSON.stringify(expected)}`)
+    console.log(`    actual:   ${JSON.stringify(actual)}`)
+  }
+}
+
+console.log("cargo.tish tests")
+console.log("================\n")
+
+let manifest = `[package]
+name = "tish_agb"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tishlang_runtime_gba = { version = ">=0.1", path = "../runtime" }
+serde = { version = "1.0", features = ["derive"] }
+`
+
+console.log("cargoPackageName:")
+assert("reads [package] name", cargoPackageName(manifest), "tish_agb")
+// A dependency table also has `name`-shaped lines; the FIRST match must win.
+assert("no name at all", cargoPackageName("[dependencies]\nserde = \"1.0\"\n"), null)
+
+console.log("stampCargoVersion:")
+let stamped = stampCargoVersion(manifest, "0.3.4")
+assert("package version rewritten", stamped.includes("version = \"0.3.4\""), true)
+// The whole point: a dependency's version REQUIREMENT must survive untouched, or the crate
+// suddenly demands a version of its sibling that does not exist.
+assert("dependency requirement untouched", stamped.includes("version = \">=0.1\""), true)
+assert("inline dep version untouched", stamped.includes("version = \"1.0\""), true)
+assert("old version gone", stamped.includes("version = \"0.1.0\""), false)
+assert("name untouched", cargoPackageName(stamped), "tish_agb")
+
+console.log(`\n${passed} passed, ${failed} failed`)
+if (failed > 0) {
+  throw `${failed} test(s) failed`
+}
