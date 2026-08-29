@@ -1,7 +1,7 @@
 {
   "name": "@tishlang/sem",
   "version": "1.2.1",
-  "description": "Automated semantic versioning and release pipeline — a semantic-release clone written in Tish (dual-runtime: Tish + Node)",
+  "description": "Automated semantic versioning and release pipeline \u2014 a semantic-release clone written in Tish (dual-runtime: Tish + Node)",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -42,7 +42,7 @@
     "build": "bash scripts/build.sh",
     "prepack": "npm run build",
     "prepublishOnly": "npm run build",
-    "test": "tish run --feature fs,process,regex test/semver.test.tish && tish run --feature fs,process,regex test/commit-parser.test.tish && tish run --feature fs,process,regex test/commit-analyzer.test.tish && tish run --feature fs,process,regex test/release-notes.test.tish && tish run --feature fs,process,regex test/yaml.test.tish",
+    "test": "tish run --feature fs,process,regex test/semver.test.tish && tish run --feature fs,process,regex test/commit-parser.test.tish && tish run --feature fs,process,regex test/commit-analyzer.test.tish && tish run --feature fs,process,regex test/release-notes.test.tish && tish run --feature fs,process,regex test/yaml.test.tish && tish run --feature fs,process,regex test/cargo.test.tish",
     "test:integration": "tish run --feature full test/integration.test.tish",
     "test:node": "npm run build && node dist/cli.js --help && node dist/cli.js --version",
     "test:all": "npm test && npm run test:integration && npm run test:node"

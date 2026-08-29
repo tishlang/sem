@@ -18,6 +18,11 @@ import {
   npmAddChannel
 } from "./plugins/npm/index.tish"
 import {
+  cargoVerifyConditions,
+  cargoPrepare,
+  cargoPublish
+} from "./plugins/cargo/index.tish"
+import {
   githubVerifyConditions,
   githubPublish,
   githubAddChannel,
@@ -56,6 +61,11 @@ const npmPlugin = {
   publish: npmPublish,
   addChannel: npmAddChannel
 }
+const cargoPlugin = {
+  verifyConditions: cargoVerifyConditions,
+  prepare: cargoPrepare,
+  publish: cargoPublish
+}
 const githubPlugin = {
   verifyConditions: githubVerifyConditions,
   publish: githubPublish,
@@ -74,6 +84,7 @@ const PLUGIN_REGISTRY = {
   "@sem/release-notes-generator": releaseNotesGenerator,
   "@sem/changelog": changelogPlugin,
   "@sem/npm": npmPlugin,
+  "@sem/cargo": cargoPlugin,
   "@sem/github": githubPlugin,
   "@sem/git": gitPlugin
 }

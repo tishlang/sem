@@ -13,7 +13,7 @@
 ## Features
 
 - Full 9-step plugin pipeline: `verifyConditions` → `analyzeCommits` → … → `fail`
-- Built-in plugins: `@sem/commit-analyzer`, `@sem/release-notes-generator`, `@sem/changelog`, `@sem/npm`, `@sem/github`, `@sem/git`
+- Built-in plugins: `@sem/commit-analyzer`, `@sem/release-notes-generator`, `@sem/changelog`, `@sem/npm`, `@sem/cargo`, `@sem/github`, `@sem/git`
 - Conventional Commits + semver (`feat` / `fix` / `perf` / breaking → bump; `chore` / `docs` / `ci` → no release)
 - Config via file, `package.json`, `SEM_CONFIG`, `--config-json`, or Action `config` (**JSON or YAML**)
 - Soft-skip on non-release / ignored branches (exit 0 — CI stays green)
@@ -194,6 +194,50 @@ Priority when `config` / `--config-json` / `SEM_CONFIG` is **not** set:
   ]
 }
 ```
+
+### Publishing crates (`@sem/cargo`)
+
+The cargo counterpart of `@sem/npm`: stamps the release version into each crate's `Cargo.toml` and
+publishes to crates.io.
+
+```json
+[
+  "@sem/cargo",
+  {
+    "crates": ["my_core", "my_macros", "my_engine"],
+    "cratesDir": "crates"
+  }
+]
+```
+
+| Option | Default | Purpose |
+|--------|---------|---------|
+| `crates` | *(required)* | Package names **in dependency order** — dependencies before dependents |
+| `cratesDir` | `crates` | Directory the crates live under |
+| `cargoPublish` | `true` | `false` to stamp versions without publishing |
+| `publishFlags` | `--no-verify --allow-dirty` | Flags passed to `cargo publish` |
+| `maxAttempts` | `6` | Rate-limit retries per crate |
+| `rateLimitWait` | `60` | Seconds to wait between them |
+
+A Rust release is several crates rather than one package, which drives three behaviours npm does not
+need:
+
+- **Order matters.** crates.io rejects a crate whose dependencies are not on the registry yet, so
+  `crates` is an ordered list and is published in that order.
+- **Already-published crates are skipped.** Each crate is checked against the registry first, so a
+  run interrupted halfway — which a rate limit will do — resumes instead of restarting.
+- **Rate limits are waited out.** crates.io throttles new crates hard enough to hit mid-release. A
+  429 is retried; any other failure fails fast, since retrying a real error just delays the report.
+
+Crates are addressed by **package name**, not directory name — the plugin reads each `Cargo.toml`
+rather than assuming `crates/<name>/`, since a package named `my_engine` commonly lives in
+`crates/my-engine/`. A
+name in `crates` with no matching manifest fails in `verifyConditions`, before anything is published.
+
+Publishing happens from **inside** each crate's directory, so crates excluded from the workspace —
+normal for anything cross-compiled — publish correctly. `cargo publish -p` cannot see them.
+
+Only the `[package]` version is rewritten. Dependency version requirements are left alone.
 
 ### Promote-style releases (`@sem/github`)
 
