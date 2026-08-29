@@ -230,7 +230,8 @@ need:
   429 is retried; any other failure fails fast, since retrying a real error just delays the report.
 
 Crates are addressed by **package name**, not directory name — the plugin reads each `Cargo.toml`
-rather than assuming `crates/<name>/`, because `tish_agb` commonly lives in `crates/tish-agb/`. A
+rather than assuming `crates/<name>/`, since a package named `my_engine` commonly lives in
+`crates/my-engine/`. A
 name in `crates` with no matching manifest fails in `verifyConditions`, before anything is published.
 
 Publishing happens from **inside** each crate's directory, so crates excluded from the workspace —
