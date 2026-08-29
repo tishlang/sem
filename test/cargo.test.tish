@@ -21,17 +21,17 @@ console.log("cargo.tish tests")
 console.log("================\n")
 
 let manifest = `[package]
-name = "tish_agb"
+name = "my_engine"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tishlang_runtime_gba = { version = ">=0.1", path = "../runtime" }
+my_core = { version = ">=0.1", path = "../runtime" }
 serde = { version = "1.0", features = ["derive"] }
 `
 
 console.log("cargoPackageName:")
-assert("reads [package] name", cargoPackageName(manifest), "tish_agb")
+assert("reads [package] name", cargoPackageName(manifest), "my_engine")
 // A dependency table also has `name`-shaped lines; the FIRST match must win.
 assert("no name at all", cargoPackageName("[dependencies]\nserde = \"1.0\"\n"), null)
 
@@ -43,7 +43,7 @@ assert("package version rewritten", stamped.includes("version = \"0.3.4\""), tru
 assert("dependency requirement untouched", stamped.includes("version = \">=0.1\""), true)
 assert("inline dep version untouched", stamped.includes("version = \"1.0\""), true)
 assert("old version gone", stamped.includes("version = \"0.1.0\""), false)
-assert("name untouched", cargoPackageName(stamped), "tish_agb")
+assert("name untouched", cargoPackageName(stamped), "my_engine")
 
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) {
