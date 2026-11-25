@@ -198,7 +198,13 @@ Priority when `config` / `--config-json` / `SEM_CONFIG` is **not** set:
 ### Publishing crates (`@sem/cargo`)
 
 The cargo counterpart of `@sem/npm`: stamps the release version into each crate's `Cargo.toml` and
-publishes to crates.io.
+publishes to crates.io. A single crate needs only its directory:
+
+```json
+["@sem/cargo", { "cratesDir": "crate" }]
+```
+
+A workspace of crates lists them in dependency order:
 
 ```json
 [
@@ -212,8 +218,8 @@ publishes to crates.io.
 
 | Option | Default | Purpose |
 |--------|---------|---------|
-| `crates` | *(required)* | Package names **in dependency order** — dependencies before dependents |
-| `cratesDir` | `crates` | Directory the crates live under |
+| `crates` | the crate in `cratesDir` | Package names **in dependency order** — dependencies before dependents. Optional when `cratesDir` is itself a crate |
+| `cratesDir` | `crates` | A crate directory (`.` for the repo root), or a directory of crates |
 | `cargoPublish` | `true` | `false` to stamp versions without publishing |
 | `publishFlags` | `--no-verify --allow-dirty` | Flags passed to `cargo publish` |
 | `maxAttempts` | `6` | Rate-limit retries per crate |
@@ -237,7 +243,23 @@ name in `crates` with no matching manifest fails in `verifyConditions`, before a
 Publishing happens from **inside** each crate's directory, so crates excluded from the workspace —
 normal for anything cross-compiled — publish correctly. `cargo publish -p` cannot see them.
 
-Only the `[package]` version is rewritten. Dependency version requirements are left alone.
+Only the `[package]` version is rewritten. Dependency version requirements are left alone, and so is
+`version.workspace = true` (the workspace owns that version).
+
+Auth is `CARGO_REGISTRY_TOKEN`, which cargo reads from the environment — the token is never put on a
+command line. For crates.io trusted publishing, mint it with `rust-lang/crates-io-auth-action` and
+export its output as `CARGO_REGISTRY_TOKEN`.
+
+### Shared publish behaviour (`@sem/npm`, `@sem/cargo`)
+
+| | `@sem/npm` | `@sem/cargo` |
+|---|---|---|
+| Turn publishing off | `npmPublish: false` | `cargoPublish: false` |
+| Auth | `NPM_TOKEN`, OIDC trusted publishing (`id-token: write`), or `npm login` | `CARGO_REGISTRY_TOKEN` (token or trusted-publishing token) |
+| Build | the package's own `prepack` / `prepublishOnly` | `cargo publish` (`--no-verify` by default) |
+| Already on the registry | skipped, so a re-run resumes | skipped, so a re-run resumes |
+| Tag exists, registry missing it | republished automatically | republished automatically |
+| `--dry-run` | publishes nothing | publishes nothing |
 
 ### Promote-style releases (`@sem/github`)
 
@@ -382,9 +404,9 @@ GitHub Action:
 
 `--force` skips commit analysis and always produces a release. Prefer conventional commits for day-to-day; use force for recoveries, empty bumps, or intentional version jumps.
 
-### Republish (tag without npm)
+### Republish (tag without a registry publish)
 
-If a git tag exists but that version was never published to npm, and `@sem/npm` is enabled with publish on (package not `private`), `npm run release` will republish that version automatically (no `--force` needed). Skipped when npm publish is disabled or the package is private.
+If a git tag exists but that version never reached a registry an enabled publish plugin targets — npm for `@sem/npm`, crates.io for `@sem/cargo` — `npm run release` republishes that version automatically (no `--force` needed). Registries that already have it are skipped. Nothing is republished to npm when `npmPublish` is `false` or the package is `private`, nor to crates.io when `cargoPublish` is `false`.
 
 ### Useful `@sem/npm` options
 

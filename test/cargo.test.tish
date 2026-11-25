@@ -1,7 +1,8 @@
 // sem/test/cargo.test.tish
 // Unit tests for the cargo plugin's manifest handling
 
-import { cargoPackageName, stampCargoVersion } from "../src/plugins/cargo/index.tish"
+import { cargoPackageName, stampCargoVersion, cargoCrates, cargoMissingVersion, cargoVerifyConditions } from "../src/plugins/cargo/index.tish"
+import { execCapture, writeFile } from "../src/host.tish"
 
 let passed = 0
 let failed = 0
@@ -44,6 +45,53 @@ assert("dependency requirement untouched", stamped.includes("version = \">=0.1\"
 assert("inline dep version untouched", stamped.includes("version = \"1.0\""), true)
 assert("old version gone", stamped.includes("version = \"0.1.0\""), false)
 assert("name untouched", cargoPackageName(stamped), "my_engine")
+
+// Only [package] counts: a [dependencies] / [[bin]] entry above or below it never wins.
+let depsFirst = `[package.metadata.docs]
+name = "not-it"
+
+[package]
+version = "0.2.0"
+name = "real_name"
+
+[[bin]]
+name = "cli"
+`
+assert("[package] name, not a metadata/bin name", cargoPackageName(depsFirst), "real_name")
+assert("stamps [package] version wherever it sits", stampCargoVersion(depsFirst, "1.0.0").includes("version = \"1.0.0\""), true)
+let inherited = `[package]
+name = "ws_member"
+version.workspace = true
+`
+assert("workspace-inherited version left alone", stampCargoVersion(inherited, "9.9.9"), inherited)
+assert("`namespace = ...` is not `name`", cargoPackageName("[package]\nnamespace = \"x\"\nname = \"y\"\n"), "y")
+
+console.log("crate resolution:")
+let dir = execCapture("mktemp -d").stdout.trim()
+execCapture(`mkdir -p '${dir}/crate' '${dir}/crates/my-engine' '${dir}/crates/my-core'`)
+writeFile(`${dir}/crate/Cargo.toml`, "[package]\nname = \"solo\"\nversion = \"0.1.0\"\n")
+writeFile(`${dir}/crates/my-engine/Cargo.toml`, "[package]\nname = \"my_engine\"\nversion = \"0.1.0\"\n")
+writeFile(`${dir}/crates/my-core/Cargo.toml`, "[package]\nname = \"my_core\"\nversion = \"0.1.0\"\n")
+assert("single crate needs no `crates` list", cargoCrates({ cratesDir: "crate" }, dir), ["solo"])
+assert("explicit `crates` order is kept", cargoCrates({ cratesDir: "crates", crates: ["my_core", "my_engine"] }, dir), ["my_core", "my_engine"])
+assert("directory of crates with no list → none", cargoCrates({ cratesDir: "crates" }, dir), [])
+assert("publishing off → never missing", cargoMissingVersion({ cratesDir: "crate", cargoPublish: false }, dir, "0.1.0"), false)
+
+let quiet = { info: m => {}, success: m => {}, warn: m => {}, error: m => {}, debug: m => {} }
+fn verifyError(cfg, env) {
+  try {
+    cargoVerifyConditions(cfg, { cwd: dir, env: env, logger: quiet })
+    return null
+  } catch (e) {
+    return "" + e
+  }
+}
+let tok = { CARGO_REGISTRY_TOKEN: "x" }
+assert("verify: package names resolve across hyphen/underscore dirs", verifyError({ cratesDir: "crates", crates: ["my_core", "my_engine"] }, tok), null)
+assert("verify: single crate dir", verifyError({ cratesDir: "crate" }, tok), null)
+assert("verify: unknown crate fails before publish", verifyError({ cratesDir: "crates", crates: ["nope"] }, tok) !== null, true)
+assert("verify: no token fails", verifyError({ cratesDir: "crate" }, {}) !== null, true)
+execCapture(`rm -rf '${dir}'`)
 
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) {
