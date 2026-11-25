@@ -1,0 +1,61 @@
+// sem/test/npm.test.tish
+// @sem/npm publishes any package, not just sem: no build script and no dist/cli.js required.
+// The fixture's .npmrc sets dry-run, so `npm publish` packs and stops before the registry.
+import { npmPublish } from "../src/plugins/npm/index.tish"
+import { execCapture, writeFile } from "../src/host.tish"
+
+let passed = 0
+let failed = 0
+
+fn assert(name, condition) {
+  if (condition) {
+    passed = passed + 1
+  } else {
+    failed = failed + 1
+    console.log("FAIL: " + name)
+  }
+}
+
+console.log("npm plugin tests")
+console.log("================")
+
+let dir = execCapture("mktemp -d").stdout.trim()
+writeFile(dir + "/package.json", JSON.stringify({ name: "sem-npm-plugin-fixture", version: "1.2.3", main: "index.js" }, null, 2) + "\n")
+writeFile(dir + "/index.js", "export default 1\n")
+writeFile(dir + "/.npmrc", "dry-run=true\n")
+
+let logs = []
+let logger = {
+  info: m => { logs.push(m) },
+  success: m => { logs.push(m) },
+  debug: m => { logs.push(m) },
+  warn: m => { logs.push(m) },
+  error: m => { logs.push(m) }
+}
+let context = {
+  cwd: dir,
+  logger: logger,
+  env: {},
+  options: { dryRun: false },
+  nextRelease: { version: "1.2.3", channel: null }
+}
+
+let result = null
+let error = null
+try {
+  result = npmPublish({}, context)
+} catch (e) {
+  error = e
+}
+
+assert("publishes a package with no build script or dist/cli.js (got: " + error + ")", error === null)
+assert("returns the npm release info", result !== null && result.name === "npm")
+assert("links the published version", result !== null && result.url === "https://www.npmjs.com/package/sem-npm-plugin-fixture/v/1.2.3")
+
+execCapture("rm -rf '" + dir + "'")
+
+console.log("")
+console.log(`${passed} passed, ${failed} failed`)
+if (failed > 0) {
+  process.exit(1)
+}
