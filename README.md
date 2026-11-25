@@ -13,7 +13,7 @@
 ## Features
 
 - Full 9-step plugin pipeline: `verifyConditions` → `analyzeCommits` → … → `fail`
-- Built-in plugins: `@sem/commit-analyzer`, `@sem/release-notes-generator`, `@sem/changelog`, `@sem/npm`, `@sem/github`, `@sem/git`
+- Built-in plugins: `@sem/commit-analyzer`, `@sem/release-notes-generator`, `@sem/changelog`, `@sem/npm`, `@sem/cargo`, `@sem/github`, `@sem/git`
 - Conventional Commits + semver (`feat` / `fix` / `perf` / breaking → bump; `chore` / `docs` / `ci` → no release)
 - Config via file, `package.json`, `SEM_CONFIG`, `--config-json`, or Action `config` (**JSON or YAML**)
 - Soft-skip on non-release / ignored branches (exit 0 — CI stays green)
@@ -195,6 +195,72 @@ Priority when `config` / `--config-json` / `SEM_CONFIG` is **not** set:
 }
 ```
 
+### Publishing crates (`@sem/cargo`)
+
+The cargo counterpart of `@sem/npm`: stamps the release version into each crate's `Cargo.toml` and
+publishes to crates.io. A single crate needs only its directory:
+
+```json
+["@sem/cargo", { "cratesDir": "crate" }]
+```
+
+A workspace of crates lists them in dependency order:
+
+```json
+[
+  "@sem/cargo",
+  {
+    "crates": ["my_core", "my_macros", "my_engine"],
+    "cratesDir": "crates"
+  }
+]
+```
+
+| Option | Default | Purpose |
+|--------|---------|---------|
+| `crates` | the crate in `cratesDir` | Package names **in dependency order** — dependencies before dependents. Optional when `cratesDir` is itself a crate |
+| `cratesDir` | `crates` | A crate directory (`.` for the repo root), or a directory of crates |
+| `cargoPublish` | `true` | `false` to stamp versions without publishing |
+| `publishFlags` | `--no-verify --allow-dirty` | Flags passed to `cargo publish` |
+| `maxAttempts` | `6` | Rate-limit retries per crate |
+| `rateLimitWait` | `60` | Seconds to wait between them |
+
+A Rust release is several crates rather than one package, which drives three behaviours npm does not
+need:
+
+- **Order matters.** crates.io rejects a crate whose dependencies are not on the registry yet, so
+  `crates` is an ordered list and is published in that order.
+- **Already-published crates are skipped.** Each crate is checked against the registry first, so a
+  run interrupted halfway — which a rate limit will do — resumes instead of restarting.
+- **Rate limits are waited out.** crates.io throttles new crates hard enough to hit mid-release. A
+  429 is retried; any other failure fails fast, since retrying a real error just delays the report.
+
+Crates are addressed by **package name**, not directory name — the plugin reads each `Cargo.toml`
+rather than assuming `crates/<name>/`, since a package named `my_engine` commonly lives in
+`crates/my-engine/`. A
+name in `crates` with no matching manifest fails in `verifyConditions`, before anything is published.
+
+Publishing happens from **inside** each crate's directory, so crates excluded from the workspace —
+normal for anything cross-compiled — publish correctly. `cargo publish -p` cannot see them.
+
+Only the `[package]` version is rewritten. Dependency version requirements are left alone, and so is
+`version.workspace = true` (the workspace owns that version).
+
+Auth is `CARGO_REGISTRY_TOKEN`, which cargo reads from the environment — the token is never put on a
+command line. For crates.io trusted publishing, mint it with `rust-lang/crates-io-auth-action` and
+export its output as `CARGO_REGISTRY_TOKEN`.
+
+### Shared publish behaviour (`@sem/npm`, `@sem/cargo`)
+
+| | `@sem/npm` | `@sem/cargo` |
+|---|---|---|
+| Turn publishing off | `npmPublish: false` | `cargoPublish: false` |
+| Auth | `NPM_TOKEN`, OIDC trusted publishing (`id-token: write`), or `npm login` | `CARGO_REGISTRY_TOKEN` (token or trusted-publishing token) |
+| Build | the package's own `prepack` / `prepublishOnly` | `cargo publish` (`--no-verify` by default) |
+| Already on the registry | skipped, so a re-run resumes | skipped, so a re-run resumes |
+| Tag exists, registry missing it | republished automatically | republished automatically |
+| `--dry-run` | publishes nothing | publishes nothing |
+
 ### Promote-style releases (`@sem/github`)
 
 Same model as the tish repo: merge to `main` drafts a **prerelease** (with assets); promoting the GitHub Release (uncheck “Set as a pre-release”) triggers publish workflows.
@@ -338,9 +404,9 @@ GitHub Action:
 
 `--force` skips commit analysis and always produces a release. Prefer conventional commits for day-to-day; use force for recoveries, empty bumps, or intentional version jumps.
 
-### Republish (tag without npm)
+### Republish (tag without a registry publish)
 
-If a git tag exists but that version was never published to npm, and `@sem/npm` is enabled with publish on (package not `private`), `npm run release` will republish that version automatically (no `--force` needed). Skipped when npm publish is disabled or the package is private.
+If a git tag exists but that version never reached a registry an enabled publish plugin targets — npm for `@sem/npm`, crates.io for `@sem/cargo` — `npm run release` republishes that version automatically (no `--force` needed). Registries that already have it are skipped. Nothing is republished to npm when `npmPublish` is `false` or the package is `private`, nor to crates.io when `cargoPublish` is `false`.
 
 ### Useful `@sem/npm` options
 

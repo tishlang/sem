@@ -8,7 +8,8 @@ import * as semver from "./semver.tish"
 import { parseCommit } from "./commit-parser.tish"
 import { parseGitUrl } from "./utils/url.tish"
 import { readFile, fileExists } from "./host.tish"
-import { npmHasVersion } from "./plugins/npm/index.tish"
+import { npmMissingVersion } from "./plugins/npm/index.tish"
+import { cargoMissingVersion } from "./plugins/cargo/index.tish"
 import { normalizeForce, describeForce } from "./force.tish"
 
 const log = createLogger("core")
@@ -88,29 +89,22 @@ fn isIgnoredBranch(config, currentBranch) {
   return false
 }
 
-// Republish only when @sem/npm will actually publish (not private / npmPublish:false / plugin absent)
-fn npmPublishEnabled(plugins, cwd) {
-  if (plugins === null || plugins.plugins === null) return false
+// Registries an enabled publish plugin would publish to but that lack `version` — the republish
+// recovery for a tag whose publish never landed. Each plugin decides for itself (publishing off,
+// private package → not missing), so the orchestrator holds no registry-specific rules.
+fn registriesMissing(plugins, cwd, version) {
+  let out = []
+  if (plugins === null || plugins.plugins === null) return out
   let i = 0
   while (i < plugins.plugins.length) {
     let p = plugins.plugins[i]
-    if (p !== null && p.name === "@sem/npm") {
-      let cfg = p.config !== null ? p.config : {}
-      if (cfg.npmPublish === false) return false
-      let pkgPath = cwd + "/package.json"
-      if (fileExists(pkgPath)) {
-        try {
-          let pkg = JSON.parse(readFile(pkgPath))
-          if (pkg.private === true) return false
-        } catch (e) {
-          // ignore
-        }
-      }
-      return true
-    }
     i = i + 1
+    if (p === null) continue
+    let cfg = p.config !== null ? p.config : {}
+    if (p.name === "@sem/npm" && npmMissingVersion(cfg, cwd, version)) out.push("npm")
+    if (p.name === "@sem/cargo" && cargoMissingVersion(cfg, cwd, version)) out.push("crates.io")
   }
-  return false
+  return out
 }
 
 fn determineBranch(config, currentBranch) {
@@ -317,24 +311,12 @@ export async fn release(config) {
     }
 
     if (releaseType === null) {
-      let pkgName = null
-      let pkgPath = `${cwd}/package.json`
-      if (fileExists(pkgPath)) {
-        let pkg = JSON.parse(readFile(pkgPath))
-        pkgName = pkg.name
-      }
       let lastVer = context.lastRelease !== null ? context.lastRelease.version : null
       let lastTag = context.lastRelease !== null ? context.lastRelease.gitTag : null
-      // Recovery: tag exists but version never made it to npm. Only when npm publish is in play.
-      if (
-        npmPublishEnabled(plugins, cwd) &&
-        pkgName !== null &&
-        lastVer !== null &&
-        lastVer !== "0.0.0" &&
-        lastTag !== null &&
-        !npmHasVersion(pkgName, lastVer)
-      ) {
-        log.info(`${pkgName}@${lastVer} is tagged (${lastTag}) but missing from npm — publishing`)
+      // Recovery: the tag exists but the version never reached a registry sem publishes to.
+      let missing = lastVer !== null && lastVer !== "0.0.0" && lastTag !== null ? registriesMissing(plugins, cwd, lastVer) : []
+      if (missing.length > 0) {
+        log.info(`${lastVer} is tagged (${lastTag}) but missing from ${missing.join(" and ")} — publishing`)
         republish = true
         releaseType = "patch"
         context.nextRelease = {
@@ -343,7 +325,7 @@ export async fn release(config) {
           gitTag: lastTag,
           gitHead: context.lastRelease.gitHead !== null ? context.lastRelease.gitHead : gitOps.getHead(cwd),
           channel: null,
-          notes: "Republish " + lastVer + " (git tag existed; package was not on npm)"
+          notes: "Republish " + lastVer + " (git tag existed; not yet on " + missing.join(" and ") + ")"
         }
       } else {
         log.info("No release type determined — no release needed")

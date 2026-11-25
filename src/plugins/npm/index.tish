@@ -14,6 +14,18 @@ export fn npmHasVersion(name, version) {
   return out === version
 }
 
+// For the orchestrator's republish recovery: is `version` missing from npm? False when publishing
+// is off or the package is private, since then nothing would be published anyway.
+export fn npmMissingVersion(pluginConfig, cwd, version) {
+  if (pluginConfig.npmPublish === false) return false
+  let pkgRoot = pluginConfig.pkgRoot !== null ? pluginConfig.pkgRoot : "."
+  let pkgPath = `${cwd}/${pkgRoot}/package.json`
+  if (!fileExists(pkgPath)) return false
+  let pkg = JSON.parse(readFile(pkgPath))
+  if (pkg.private === true || pkg.name === null) return false
+  return !npmHasVersion(pkg.name, version)
+}
+
 // verifyConditions — check npm auth
 export fn npmVerifyConditions(pluginConfig, context) {
   let logger = context.logger
@@ -25,13 +37,17 @@ export fn npmVerifyConditions(pluginConfig, context) {
     return null
   }
 
-  // Check for NPM_TOKEN
+  // Check for NPM_TOKEN, then OIDC trusted publishing, then an existing npm login
   let token = env.NPM_TOKEN
-  if (token === null || token === "") {
+  let oidc = env.ACTIONS_ID_TOKEN_REQUEST_URL !== null && env.ACTIONS_ID_TOKEN_REQUEST_URL !== ""
+  if ((token === null || token === "") && oidc) {
+    // npm (>= 11.5.1) exchanges the job's OIDC token at publish time; `npm whoami` cannot see it.
+    logger.info("Using npm OIDC trusted publishing (id-token: write)")
+  } else if (token === null || token === "") {
     // Try .npmrc or npm whoami
     let result = execCapture(`cd "${context.cwd}" && npm whoami`)
     if (result.code !== 0) {
-      throw "npm authentication failed. Set NPM_TOKEN or run 'npm login'."
+      throw "npm authentication failed. Set NPM_TOKEN, grant the job id-token: write for OIDC trusted publishing, or run 'npm login'."
     }
     logger.info(`Authenticated as: ${result.stdout.trim()}`)
   } else {
@@ -116,6 +132,15 @@ export fn npmPublish(pluginConfig, context) {
 
   if (context.options.dryRun) {
     logger.info(`[dry-run] Would publish ${pkg.name}@${context.nextRelease.version}`)
+    return {
+      name: "npm",
+      url: `https://www.npmjs.com/package/${pkg.name}/v/${context.nextRelease.version}`
+    }
+  }
+
+  // A re-run resumes: a version npm already has is skipped rather than failing the release.
+  if (npmHasVersion(pkg.name, context.nextRelease.version)) {
+    logger.info(`Skipping ${pkg.name}@${context.nextRelease.version} (already on npm)`)
     return {
       name: "npm",
       url: `https://www.npmjs.com/package/${pkg.name}/v/${context.nextRelease.version}`
